@@ -34,6 +34,13 @@ Requires: a git repo, `python3`, and a connected tracker MCP server (Linear by d
 
 ## Usage
 
+### In-app help
+
+```
+/dev-orchestrator:help                          # usage overview
+/dev-orchestrator:help how do tier labels work  # ask anything
+```
+
 ### An orchestrated run
 
 ```
@@ -108,7 +115,7 @@ The run is interactive-by-design at decision points, but the 8-hour middle shoul
 .claude-plugin/{plugin.json, marketplace.json}
 agents/        milestone-orchestrator, implementer, scope-guardian,
                qa-verifier, code-reviewer, ticket-smith
-commands/      orchestrate.md, report.md
+commands/      orchestrate.md, report.md, help.md
 skills/tracker/{SKILL.md, adapters/linear.md}
 hooks/hooks.json          SubagentStop → usage logging
 scripts/       log_usage.py, log_event.sh, report.py
