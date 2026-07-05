@@ -13,7 +13,7 @@ Arguments: `$ARGUMENTS`
 
 3. **If no arguments**, present a compact usage overview (the plugin is already installed — skip installation):
    - What the plugin does, in 2–3 sentences, with the pipeline diagram from the README.
-   - The two commands with example invocations and flags: `/dev-orchestrator:orchestrate`, `/dev-orchestrator:report`.
+   - The commands with example invocations and flags: `/dev-orchestrator:orchestrate`, `/dev-orchestrator:report`, `/dev-orchestrator:clean`.
    - The one-off fleet table (agent → what to ask it).
    - Ticket conventions required for a good run (acceptance criteria, `tier:` labels, `mod:` labels, blocked-by relations) — note that `ticket-smith` grooms these automatically.
    - Prerequisites to flag if unmet: check that this is a git repo, that a tracker MCP server is connected (per `.dev-orchestrator/config.json`, default Linear), and that `python3` exists. Mention the permissions-allowlist advice for unattended runs.

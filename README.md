@@ -63,6 +63,16 @@ Flags: `--branch <name>`, `--dry-run` (plan only).
 
 Token usage and cost by model / agent / ticket, retries, escalations, gate failures, wall time — plus a short qualitative read of what burned attempts and why.
 
+### Cleaning up old runs
+
+```
+/dev-orchestrator:clean                 # list runs with size and date
+/dev-orchestrator:clean --keep 10       # keep the newest 10, delete the rest
+/dev-orchestrator:clean --older-than 30 # delete runs older than 30 days
+```
+
+Also accepts `--all` or explicit run ids; selectors combine as a union, and deletion is previewed and confirmed first. The active run (per `.dev-orchestrator/current-run`) is never deleted, and a stale `current-run` pointer left by a killed run — which would silently route one-off agent usage into a dead log — is detected and cleared.
+
 ### The fleet, one-off
 
 Every agent works standalone — just ask:
@@ -101,6 +111,8 @@ Everything lands in `.dev-orchestrator/runs/<run-id>/log.jsonl` (gitignored):
 
 Schema: [docs/log-schema.md](docs/log-schema.md). The hook no-ops unless `.dev-orchestrator/current-run` exists, so one-off agent use stays noise-free.
 
+Logs live only in the repo (gitignored) and are never pruned automatically — a run stays reportable until you delete it. Inspect with `jq`/`grep` or `/dev-orchestrator:report`; prune with `/dev-orchestrator:clean` (or plain `rm -rf .dev-orchestrator/runs/<run-id>` — same effect).
+
 ## Tracker adapters
 
 Agents speak a canonical ticket model (`skills/tracker/SKILL.md`); adapters map it to real tools. `linear` ships in-box. To add Jira/GitHub/etc.: copy `skills/tracker/adapters/linear.md`, map the operations and status table to your tracker's MCP tools, and set `{"tracker": "<name>"}` in `.dev-orchestrator/config.json`. Adapters are pure mappings — no policy.
@@ -115,10 +127,10 @@ The run is interactive-by-design at decision points, but the 8-hour middle shoul
 .claude-plugin/{plugin.json, marketplace.json}
 agents/        milestone-orchestrator, implementer, scope-guardian,
                qa-verifier, code-reviewer, ticket-smith
-commands/      orchestrate.md, report.md, help.md
+commands/      orchestrate.md, report.md, clean.md, help.md
 skills/tracker/{SKILL.md, adapters/linear.md}
 hooks/hooks.json          SubagentStop → usage logging
-scripts/       log_usage.py, log_event.sh, report.py
+scripts/       log_usage.py, log_event.sh, report.py, clean.py
 config/pricing.json       editable $/MTok table
 docs/log-schema.md
 ```
