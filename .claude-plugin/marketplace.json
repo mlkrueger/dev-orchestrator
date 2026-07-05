@@ -1,0 +1,14 @@
+{
+  "name": "dev-orchestrator",
+  "owner": {
+    "name": "Matthew Krueger",
+    "email": "matthew.l.krueger@gmail.com"
+  },
+  "plugins": [
+    {
+      "name": "dev-orchestrator",
+      "source": "./",
+      "description": "Autonomous ticket-driven development with a tiered agent fleet, scope governance, and token accounting."
+    }
+  ]
+}

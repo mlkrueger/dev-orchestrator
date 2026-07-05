@@ -1,0 +1,17 @@
+{
+  "name": "dev-orchestrator",
+  "version": "0.1.0",
+  "description": "Autonomous ticket-driven development. Milestone-scoped orchestrators dispatch a tiered agent fleet (implementer, scope-guardian, qa-verifier, code-reviewer, ticket-smith) with model escalation, scope governance, token accounting, and tracker-neutral ticket operations.",
+  "author": {
+    "name": "Matthew Krueger",
+    "email": "matthew.l.krueger@gmail.com"
+  },
+  "license": "MIT",
+  "keywords": [
+    "orchestration",
+    "agents",
+    "autonomous-development",
+    "linear",
+    "tickets"
+  ]
+}

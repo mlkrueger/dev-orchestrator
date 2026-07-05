@@ -1,0 +1,10 @@
+{
+  "_comment": "USD per million tokens. Matched by substring against the transcript's model id (first match wins). Override per-repo at .dev-orchestrator/pricing.json. Cache multipliers apply to the input rate.",
+  "per_mtok": [
+    { "match": "haiku", "input": 1.0, "output": 5.0 },
+    { "match": "sonnet", "input": 3.0, "output": 15.0 },
+    { "match": "opus", "input": 5.0, "output": 25.0 }
+  ],
+  "cache_read_multiplier": 0.1,
+  "cache_write_multiplier": 1.25
+}
