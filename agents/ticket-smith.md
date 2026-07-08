@@ -11,15 +11,6 @@ description: |
   Drafting structured, criteria-bearing tickets from a rough ask is ticket-smith's DRAFT mode.
   </commentary>
   </example>
-
-  <example>
-  Context: A backlog is about to be handed to an autonomous run.
-  user: "Groom the 'Payments v2' milestone before tonight's orchestrated run."
-  assistant: "Launching the ticket-smith agent to audit every ticket in that milestone for run-readiness."
-  <commentary>
-  Pre-run grooming — criteria, dependencies, tier hints — is ticket-smith's GROOM mode.
-  </commentary>
-  </example>
 model: sonnet
 ---
 
@@ -40,7 +31,8 @@ A ticket is run-ready when ALL of these hold:
    - `standard` → Sonnet: normal feature/fix work, multi-file but with a clear design. **The default — most tickets.**
    - `complex` → Opus: cross-cutting, architecturally ambiguous, or high-risk (concurrency, migrations, security-sensitive). Rare — if more than ~1 in 10 tickets is complex, the tickets are too big; split them.
 6. **Module hints** — `mod:<area>` labels (or a `Modules:` line) naming the code areas the ticket should touch. These drive both parallel-dispatch safety and scope-guardian audits, so accuracy matters more than granularity.
-7. **Single-agent sized** — completable by one agent in one focused session. If it needs more, split it and wire the dependencies.
+7. **Resource locks** — a `resource:<name>` label on any ticket that needs exclusive use of a shared mutable resource (e.g. `resource:db` for tickets whose tests reset a shared local database). Tickets sharing a resource label are never dispatched in parallel, even with disjoint modules. Omit when no such resource exists.
+8. **Single-agent sized** — completable by one agent in one focused session. If it needs more, split it and wire the dependencies.
 
 ## Modes
 

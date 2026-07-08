@@ -11,15 +11,6 @@ description: |
   Pre-commit review of a gated ticket is the reviewer's role in the pipeline.
   </commentary>
   </example>
-
-  <example>
-  Context: One-off review outside a run.
-  user: "Give my working tree changes a proper review."
-  assistant: "Launching the code-reviewer agent on your current diff."
-  <commentary>
-  Standalone use on any diff, no orchestration required.
-  </commentary>
-  </example>
 model: sonnet
 tools: Read, Bash, Glob, Grep
 ---

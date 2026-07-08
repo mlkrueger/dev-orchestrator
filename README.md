@@ -6,7 +6,7 @@ Autonomous, ticket-driven development for Claude Code. Point it at a groomed bac
 you ──/orchestrate──▶ top-level session (plan, confirm, dispatch, decide)
                           │  one subagent per milestone — fresh context each time
                           ▼
-                 milestone-orchestrator (opus)
+                 milestone-orchestrator (sonnet)
                           │  per ticket, cheapest capable tier
                           ▼
         implementer (haiku│sonnet│opus)  ──▶ scope-guardian ──▶ qa-verifier ──▶ code-reviewer ──▶ commit
@@ -93,6 +93,7 @@ Groomed tickets carry (ticket-smith enforces all of these):
 - `## Acceptance criteria` — testable, observable checks in the description.
 - `tier:simple|standard|complex` label → routes to Haiku / Sonnet / Opus. Most tickets are `standard`; `complex` should be rare (~1 in 10) or your tickets are too big.
 - `mod:<area>` labels — the modules the ticket may touch. These drive parallel-dispatch safety **and** scope-guardian audits.
+- `resource:<name>` labels — shared mutable resources the ticket needs exclusively (e.g. `resource:db` when tests reset a shared database). Tickets sharing a resource label never run in parallel.
 - Tracker-native blocked-by relations for dependencies (prose dependencies are ignored and flagged).
 
 ## Escalation & governance
@@ -100,6 +101,7 @@ Groomed tickets carry (ticket-smith enforces all of these):
 - 2 failed gate attempts at a tier → escalate one tier (haiku→sonnet→opus). 2 failures at opus → ticket marked blocked with full history; the run moves on.
 - The **scope-guardian** rejects any diff not attributable to the ticket. Sensitive areas (auth, schema/migrations, CI, deps, security config, payments) fail closed: touching them without explicit ticket sanction is an automatic bounce.
 - Orchestrators cap at Opus. Nothing in this plugin ever dispatches a Fable-class model unless you explicitly approve it in-session.
+- Milestone-orchestrators default to Sonnet (coordination is mechanical; the gates carry the judgment). Override with `{"orchestrator_model": "opus"}` in `.dev-orchestrator/config.json` for milestones dominated by `complex`-tier tickets.
 
 ## Run log & token accounting
 

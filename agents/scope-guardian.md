@@ -11,15 +11,6 @@ description: |
   A test ticket that changed 6 files may include out-of-scope source changes — exactly what the guardian catches.
   </commentary>
   </example>
-
-  <example>
-  Context: One-off use on the user's own changes.
-  user: "I meant to only touch the CLI arg parsing — did I sprawl?"
-  assistant: "Launching the scope-guardian agent to audit your working tree against that intent."
-  <commentary>
-  The guardian works standalone: any diff plus a statement of intended scope.
-  </commentary>
-  </example>
 model: sonnet
 tools: Read, Bash, Glob, Grep
 ---

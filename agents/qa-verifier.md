@@ -11,15 +11,6 @@ description: |
   Independent verification after a completion claim is the qa-verifier's core job.
   </commentary>
   </example>
-
-  <example>
-  Context: One-off verification of manual work.
-  user: "I think the export feature is done — criteria are in the ticket. Can you verify?"
-  assistant: "Launching the qa-verifier agent to test each criterion against the running code."
-  <commentary>
-  Standalone use: any change plus explicit criteria to verify against.
-  </commentary>
-  </example>
 model: sonnet
 tools: Read, Bash, Glob, Grep, WebFetch
 ---

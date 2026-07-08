@@ -31,6 +31,7 @@ Resolve each team's actual workflow states once per session via `list_issue_stat
 
 - Tier hints: labels named exactly `tier:simple`, `tier:standard`, `tier:complex`. Create missing ones with `create_issue_label` (check `list_issue_labels` first).
 - Module hints: labels `mod:<area>` (e.g. `mod:api`, `mod:auth`, `mod:frontend`). Same create-if-missing flow.
+- Resource hints: labels `resource:<name>` (e.g. `resource:db`). Same create-if-missing flow.
 
 ## Caveats
 

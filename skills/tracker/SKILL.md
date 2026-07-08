@@ -25,6 +25,7 @@ All dev-orchestrator components speak this canonical model. An **adapter** maps 
 | `dependencies` | Tickets that must complete first | tracker-native blocked-by relations |
 | `tier_hint` | Model routing | label: `tier:simple` \| `tier:standard` \| `tier:complex` |
 | `module_hints` | Code areas the ticket should touch | labels `mod:<area>` (preferred) or a `Modules:` line in the description |
+| `resource_hints` | Shared mutable resources needing exclusive use | labels `resource:<name>` (e.g. `resource:db`); tickets sharing one never run in parallel |
 | `milestone` | Grouping for orchestration | tracker-native milestone/cycle/epic |
 
 Conventions: tier and module hints are **labels** so they are filterable; acceptance criteria live in the description so they travel with the ticket text verbatim.

@@ -10,13 +10,14 @@ Arguments: `$ARGUMENTS`
 ## Phase 1 — Preflight
 
 1. Confirm this is a git repository with a clean working tree (`git status --porcelain`). Dirty tree → stop and ask the user.
-2. Load the `dev-orchestrator:tracker` skill (Skill tool). Read `.dev-orchestrator/config.json` if present.
-3. From the arguments, resolve the target project/milestones via the tracker. No argument → list available milestones with open tickets and ask the user to pick.
+2. Check what model THIS session is running on. If it is a Fable-class model, warn the user before anything else: this context lives for the whole run and is resent every turn, making it the most expensive seat in the system for what is coordination work — recommend they switch (`/model opus` or `/model sonnet`) and restart the command. Proceed only if they explicitly accept the cost.
+3. Load the `dev-orchestrator:tracker` skill (Skill tool). Read `.dev-orchestrator/config.json` if present.
+4. From the arguments, resolve the target project/milestones via the tracker. No argument → list available milestones with open tickets and ask the user to pick.
 
 ## Phase 2 — Readiness
 
 1. Fetch the target tickets (one filtered list per milestone; do not get tickets one-by-one).
-2. Scan for run-readiness gaps: missing acceptance criteria, missing `tier:` labels, prose-only dependencies, missing module hints.
+2. Scan for run-readiness gaps: missing acceptance criteria, missing `tier:` labels, prose-only dependencies, missing module hints, missing `resource:` labels on tickets that plainly contend for a shared resource (e.g. tests that reset a shared database).
 3. If gaps exist, offer: dispatch **ticket-smith** (Agent tool, sonnet) to groom the affected milestones, or proceed as-is (gaps degrade routing, parallelism, and scope-guarding — say so).
 
 ## Phase 3 — Plan and confirm
@@ -26,7 +27,7 @@ Produce the run plan:
 - **Milestone order** (dependency-respecting) and per-milestone ticket lists with tiers.
 - **Branch**: from `--branch`, else `build/<project-slug>-<YYYYMMDD>`.
 - **Run id**: `<YYYYMMDD-HHMM>-<project-slug>`.
-- **Policies**: routing simple→haiku / standard→sonnet / complex→opus; 2 attempts per tier then escalate; ceiling Opus everywhere; **Fable-class models never used** unless the user explicitly approves in this conversation; ≤3 concurrent implementers per milestone.
+- **Policies**: routing simple→haiku / standard→sonnet / complex→opus; 2 attempts per tier then escalate; ceiling Opus everywhere; **Fable-class models never used** unless the user explicitly approves in this conversation; ≤3 concurrent implementers per milestone; milestone-orchestrators at **sonnet** (override via `"orchestrator_model"` in `.dev-orchestrator/config.json` — opus only for milestones that are mostly `complex`-tier).
 
 Present the plan and **WAIT for explicit approval**. If `--dry-run`, stop here permanently.
 
@@ -45,7 +46,7 @@ After approval:
 For each milestone **sequentially** (parallel milestones share one working tree — do not):
 
 1. Log `{"event":"milestone_start","milestone":"<name>","tickets":<n>}`.
-2. Spawn a **milestone-orchestrator** (Agent tool, `subagent_type: "milestone-orchestrator"`, model opus, `run_in_background: false`) with this brief:
+2. Spawn a **milestone-orchestrator** (Agent tool, `subagent_type: "milestone-orchestrator"`, model from the orchestrator-model policy — sonnet unless overridden, `run_in_background: false`) with this brief:
 
    ```
    MILESTONE: <name>
@@ -53,9 +54,11 @@ For each milestone **sequentially** (parallel milestones share one working tree 
    BRANCH: <branch>
    TICKETS: <id list — the orchestrator fetches details itself via the tracker skill>
    POLICIES: <routing/escalation/concurrency, plus any user-specific instructions verbatim>
+
+   Begin now: fetch the ticket details and dispatch the first batch. Do not reply with a plan.
    ```
 
-   Do NOT paste full ticket bodies into the brief — the milestone orchestrator fetches its own. Keep the brief under ~30 lines.
+   Do NOT paste full ticket bodies into the brief — the milestone orchestrator fetches its own. Keep the brief under ~30 lines, and always end it with the "Begin now" imperative — orchestrators that open with a plan waste a round trip.
 3. On return, record only the summary block. Then decide:
    - `DECISIONS NEEDED` items → surface them to the user before continuing.
    - `BLOCKED` ≥ 2 tickets, or any `NOT ATTEMPTED` → pause and check with the user (respawn a fresh orchestrator for leftovers if they say continue).
