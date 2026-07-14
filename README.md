@@ -123,6 +123,16 @@ Agents speak a canonical ticket model (`skills/tracker/SKILL.md`); adapters map 
 
 The run is interactive-by-design at decision points, but the 8-hour middle should never stall on a permission prompt. Before a long run, curate the target repo's `.claude/settings.json` allowlist (edits, test/build commands, git, your tracker's MCP tools) — `/fewer-permission-prompts` builds one from your transcript history. Prompts that do fire surface in your session from any agent depth.
 
+## Versioning & changelog
+
+`CHANGELOG.md` (Keep a Changelog format) is the source of truth for what each version changed and why; `.claude-plugin/plugin.json` is the version of record. Claude Code has no native changelog display for plugin updates, so this plugin surfaces its own: a `SessionStart` hook compares the installed version against the last one it announced (`~/.claude/dev-orchestrator.last-announced-version`) and, on the first session after an update, has Claude summarize the new versions' changelog sections. Unchanged version → silent; first install → silent.
+
+Releasing: move `[Unreleased]` content into a new `## [<version>]` section, bump `plugin.json`, then run `python3 scripts/check_changelog.py` — it exits non-zero if the version lacks a changelog section or `[Unreleased]` still has content, and on success prints the section for use as the GitHub release body:
+
+```
+gh release create v<version> --notes "$(python3 scripts/check_changelog.py)"
+```
+
 ## Layout
 
 ```
@@ -132,9 +142,14 @@ agents/        milestone-orchestrator, implementer, scope-guardian,
 commands/      orchestrate.md, report.md, clean.md, help.md
 skills/tracker/{SKILL.md, adapters/linear.md}
 hooks/hooks.json          SubagentStop → usage logging
-scripts/       log_usage.py, log_event.sh, report.py, clean.py
+                          PreToolUse → dispatch policy + per-agent budgets
+                          SessionStart → post-update changelog notice
+scripts/       log_usage.py, log_event.sh, report.py, clean.py,
+               dispatch_policy.py, agent_budget.py, validate_plan.py,
+               notify_update.py, check_changelog.py
 config/pricing.json       editable $/MTok table
 docs/log-schema.md
+CHANGELOG.md              source of truth for release notes
 ```
 
 ## License
