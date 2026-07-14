@@ -35,6 +35,7 @@ Present the plan and **WAIT for explicit approval**. If `--dry-run`, stop here p
 
 After approval:
 
+0. **Validate the plan (hard gate).** Write the full run's ticket set to `.dev-orchestrator/plan.json` as `{"tickets": [{"id", "tier", "criteria": <bool>, "deps": [<ids>], "mods": [<areas>]}]}` — every milestone's tickets in one set, so cross-milestone dependencies resolve. Run `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/validate_plan.py" .dev-orchestrator/plan.json`. Non-zero exit → the run does NOT initialize: show the failures, return to Phase 2 (ticket-smith grooms; complex-share failures mean tickets must be **split**, not re-labeled), and re-validate. Never proceed past a failing validation, even if the user shrugs at a warning — failures are structural.
 1. `mkdir -p .dev-orchestrator/runs/<run-id>` ; write `meta.json` there (run id, project, branch, milestone order, started_at, policies).
 2. Write the run dir path (relative, e.g. `.dev-orchestrator/runs/<run-id>`) into `.dev-orchestrator/current-run` — the usage-logging hook and helper scripts key off this file.
 3. Ensure `.gitignore` covers `.dev-orchestrator/` (append if missing).

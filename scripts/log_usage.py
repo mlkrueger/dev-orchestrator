@@ -109,6 +109,7 @@ def main():
     turns = 0
     model = None
     ticket = None
+    milestone = None
     first_ts = last_ts = None
     sidechain = False
 
@@ -128,10 +129,16 @@ def main():
                 first_ts = first_ts or ts
                 last_ts = ts
             etype = entry.get("type")
-            if ticket is None and etype == "user":
-                m = re.search(r"^TICKET:\s*(\S+)", entry_text(entry), re.MULTILINE)
-                if m:
-                    ticket = m.group(1)
+            if etype == "user" and (ticket is None or milestone is None):
+                text = entry_text(entry)
+                if ticket is None:
+                    m = re.search(r"^TICKET:\s*(\S+)", text, re.MULTILINE)
+                    if m:
+                        ticket = m.group(1)
+                if milestone is None:
+                    m = re.search(r"^MILESTONE:\s*(.+?)\s*$", text, re.MULTILINE)
+                    if m:
+                        milestone = m.group(1)
             if etype == "assistant":
                 usage = (entry.get("message") or {}).get("usage") or {}
                 if usage:
@@ -152,6 +159,7 @@ def main():
         "ts": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "event": "agent_usage",
         "ticket": ticket,
+        "milestone": milestone,
         "agent": payload.get("agent_type") or payload.get("subagent_type"),
         "model": model,
         **totals,

@@ -12,9 +12,18 @@ import json
 import os
 import sys
 from collections import defaultdict
-from datetime import datetime
+from datetime import datetime, timedelta
 
 PLUGIN_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+# Gate agents emit per-gate vocabularies (scope: PASS|PASS_WITH_NOTES|FAIL,
+# qa: PASS|FAIL, review: APPROVE|REQUEST_CHANGES) — normalize before counting.
+PASS_VERDICTS = {"PASS", "PASS_WITH_NOTES", "APPROVE"}
+FAIL_VERDICTS = {"FAIL", "REQUEST_CHANGES"}
+
+# Events further apart than this are idle time (paused session, sleeping
+# machine), not run time — console-v1 logged 50h wall for ~10h of activity.
+IDLE_GAP_S = 30 * 60
 
 
 def resolve_run_dir(arg):
@@ -144,15 +153,32 @@ def main():
 
     counts = defaultdict(int)
     gate_fails = defaultdict(int)
+    gate_passes = defaultdict(int)
+    odd_verdicts = defaultdict(int)
     for e in events:
         counts[e.get("event")] += 1
-        if e.get("event") == "gate" and e.get("verdict") == "FAIL":
-            gate_fails[e.get("gate") or "?"] += 1
+        if e.get("event") == "gate":
+            verdict = (e.get("verdict") or "").upper()
+            gate = e.get("gate") or "?"
+            if verdict in FAIL_VERDICTS:
+                gate_fails[gate] += 1
+            elif verdict in PASS_VERDICTS:
+                gate_passes[gate] += 1
+            else:
+                odd_verdicts[verdict or "(empty)"] += 1
     escalations = [e for e in events if e.get("event") == "escalate"]
     blocked = [e for e in events if e.get("event") == "ticket_blocked"]
 
-    timestamps = [t for t in (parse_ts(e.get("ts")) for e in events) if t]
-    wall = (max(timestamps) - min(timestamps)) if timestamps else None
+    timestamps = sorted(t for t in (parse_ts(e.get("ts")) for e in events) if t)
+    wall = active = None
+    if timestamps:
+        wall = timestamps[-1] - timestamps[0]
+        idle_s = sum(
+            gap for gap in (
+                (b - a).total_seconds() for a, b in zip(timestamps, timestamps[1:])
+            ) if gap > IDLE_GAP_S
+        )
+        active = wall - timedelta(seconds=idle_s)
 
     total_cost, unpriced = 0.0, False
     total = {"input_tokens": 0, "output_tokens": 0, "cache_creation_tokens": 0, "cache_read_tokens": 0}
@@ -166,10 +192,21 @@ def main():
             total_cost += c
 
     out = [f"## Run report — `{run_dir}`", ""]
-    out.append(f"- **Wall time:** {wall}" if wall is not None else "- **Wall time:** unknown")
+    if wall is not None:
+        out.append(f"- **Active time:** {active} (wall {wall}; gaps >{IDLE_GAP_S // 60}min counted as idle)")
+    else:
+        out.append("- **Active time:** unknown")
     out.append(f"- **Agents dispatched (with usage logged):** {len(usage)}")
     out.append(f"- **Tickets done / blocked:** {counts['ticket_done']} / {counts['ticket_blocked']}")
-    out.append(f"- **Gate failures:** " + (", ".join(f"{g}: {n}" for g, n in sorted(gate_fails.items())) or "none"))
+    gate_lines = []
+    for g in sorted(set(gate_fails) | set(gate_passes)):
+        f_n, p_n = gate_fails.get(g, 0), gate_passes.get(g, 0)
+        pct = f" ({f_n / (f_n + p_n) * 100:.0f}% reject)" if (f_n + p_n) else ""
+        gate_lines.append(f"{g}: {f_n} of {f_n + p_n}{pct}")
+    out.append("- **Gate failures:** " + (", ".join(gate_lines) or "none"))
+    if odd_verdicts:
+        out.append("- **Nonstandard gate verdicts (uncounted):** "
+                   + ", ".join(f"{v}: {n}" for v, n in sorted(odd_verdicts.items())))
     out.append(f"- **Escalations:** " + (", ".join(
         f"{e.get('ticket')}: {e.get('from')}→{e.get('to')}" for e in escalations) or "none"))
     if blocked:
@@ -181,6 +218,11 @@ def main():
                f"(in {fmt_tok(total['input_tokens'])}, cache-w {fmt_tok(total['cache_creation_tokens'])}, "
                f"cache-r {fmt_tok(total['cache_read_tokens'])}, out {fmt_tok(total['output_tokens'])})")
     out.append(f"- **Estimated cost:** {cost_str}")
+    exceeded = [e for e in events if e.get("event") == "budget_exceeded"]
+    if exceeded:
+        out.append(f"- **Budget-stopped agents:** {len(exceeded)} ("
+                   + ", ".join(f"{(e.get('agent') or '?').split(':')[-1]}@{e.get('tool_calls')} calls"
+                               for e in exceeded) + ")")
     out.append("")
 
     warnings = [e for e in events if e.get("event") == "usage_warning"]
@@ -207,9 +249,16 @@ def main():
         out.append("")
         out.append("Token/cost figures below are incomplete while these warnings persist.")
         out.append("")
+    def ticket_key(u):
+        if u.get("ticket"):
+            return u["ticket"]
+        if u.get("milestone"):
+            return f"(milestone: {u['milestone']})"
+        return None
+
     out += table("Usage by model", bucket(lambda u: u.get("model")))
     out += table("Usage by agent", bucket(lambda u: u.get("agent")))
-    out += table("Usage by ticket", bucket(lambda u: u.get("ticket")))
+    out += table("Usage by ticket", bucket(ticket_key))
 
     print("\n".join(out))
 
