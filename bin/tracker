@@ -1,0 +1,569 @@
+#!/usr/bin/env python3
+"""tracker — script-first ticket I/O for the dev-orchestrator fleet (Linear).
+
+Replaces model-mediated MCP calls for the tracker skill's canonical operations
+with one deterministic CLI. Keeps ticket I/O out of the orchestrator's context
+(compact canonical JSON, not full Linear payloads) and works in headless/cron
+runs where an interactively-authenticated MCP session is absent.
+
+Auth: LINEAR_API_KEY (a Linear personal API key). Endpoint override for tests:
+LINEAR_API_URL. Team for create/list: --team, else `linear.team` in
+.dev-orchestrator/config.json.
+
+Deliberately stdlib-only (urllib, no requests): this is a hot-path CLI the
+orchestrator calls per ticket, so it must start fast under plain python3 with
+no dependency resolution.
+
+Subcommands:
+    tracker list --milestone <name> [--status s] [--label l] [--json]
+    tracker get <id> [--comments]
+    tracker create --title T --description-file F [--labels a,b] [--team K]
+    tracker update <id> [--title T] [--description-file F] [--labels a,b]
+    tracker set-status <id> <todo|in_progress|in_review|done|blocked>
+    tracker comment <id> --body-file <md>
+    tracker add-dependency <id> --blocked-by <id>
+
+Canonical statuses resolve to each team's workflow states by state *type*
+(unstarted/started/completed), never by hardcoded state names; `blocked` falls
+back to a `blocked` label + comment when the team has no Blocked-like state.
+
+Exit codes: 0 ok, 1 API/runtime error, 2 usage/config error.
+"""
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import re
+import sys
+import time
+import urllib.error
+import urllib.request
+from pathlib import Path
+
+API_URL = os.environ.get("LINEAR_API_URL", "https://api.linear.app/graphql")
+
+MANAGED_LABEL_PREFIXES = ("tier:", "mod:", "resource:")
+CANONICAL_STATUSES = ("todo", "in_progress", "in_review", "done", "blocked")
+
+
+def usage_error(msg: str):
+    print(f"error: {msg}", file=sys.stderr)
+    sys.exit(2)
+
+
+def runtime_error(msg: str):
+    print(f"error: {msg}", file=sys.stderr)
+    sys.exit(1)
+
+
+# ---------------------------------------------------------------------------
+# Linear GraphQL client (stdlib urllib, with retry)
+# ---------------------------------------------------------------------------
+
+class Linear:
+    def __init__(self, api_key: str):
+        self.api_key = api_key
+
+    def gql(self, query: str, variables: dict | None = None) -> dict:
+        body = json.dumps({"query": query, "variables": variables or {}}).encode()
+        last_err = None
+        for attempt in range(5):
+            req = urllib.request.Request(
+                API_URL, data=body,
+                headers={"Authorization": self.api_key, "Content-Type": "application/json"},
+                method="POST",
+            )
+            try:
+                with urllib.request.urlopen(req, timeout=60) as resp:
+                    payload = json.loads(resp.read().decode())
+            except urllib.error.HTTPError as e:
+                if e.code == 429:
+                    wait = e.headers.get("Retry-After")
+                    time.sleep(min(int(wait) if wait else 2 ** attempt, 60))
+                    continue
+                if e.code >= 500:
+                    time.sleep(2 ** attempt)
+                    continue
+                detail = e.read().decode(errors="replace")
+                raise RuntimeError(f"Linear API HTTP {e.code}: {detail}")
+            except urllib.error.URLError as e:
+                last_err = e
+                time.sleep(2 ** attempt)
+                continue
+            if payload.get("errors"):
+                raise RuntimeError(f"Linear API error: {payload['errors']}")
+            return payload["data"]
+        raise RuntimeError(f"Linear API: retries exhausted ({last_err})")
+
+    def paginate(self, query: str, variables: dict, *path: str) -> list[dict]:
+        nodes, cursor = [], None
+        while True:
+            data = self.gql(query, {**variables, "after": cursor})
+            for p in path:
+                data = data[p]
+            nodes += data["nodes"]
+            if not data["pageInfo"]["hasNextPage"]:
+                return nodes
+            cursor = data["pageInfo"]["endCursor"]
+
+    # -- reads ---------------------------------------------------------------
+
+    def team(self, key_or_name: str) -> dict:
+        """Team with its workflow states (one call)."""
+        data = self.gql(
+            """query($v: String!) { teams(filter: { or: [
+                 { key: { eq: $v } }, { name: { eqIgnoreCase: $v } } ] }) {
+                 nodes { id key name
+                   states { nodes { id name type position } } } } }""",
+            {"v": key_or_name},
+        )
+        nodes = data["teams"]["nodes"]
+        if not nodes:
+            runtime_error(f"Linear team {key_or_name!r} not found")
+        return nodes[0]
+
+    ISSUE_FIELDS = """id identifier title description
+        state { name type }
+        labels(first: 50) { nodes { id name } }
+        project { name } projectMilestone { name }
+        relations(first: 50) { nodes { type relatedIssue { identifier } } }
+        inverseRelations(first: 50) { nodes { type issue { identifier } } }"""
+
+    def issue_by_identifier(self, identifier: str) -> dict:
+        team_key, number = split_identifier(identifier)
+        data = self.gql(
+            """query($k: String!, $n: Float!) {
+                 issues(filter: { team: { key: { eq: $k } }, number: { eq: $n } }) {
+                   nodes { %s } } }""" % self.ISSUE_FIELDS,
+            {"k": team_key, "n": number},
+        )
+        nodes = data["issues"]["nodes"]
+        if not nodes:
+            runtime_error(f"issue {identifier!r} not found")
+        return nodes[0]
+
+    def issues_for_milestone(self, team_id: str, milestone: str) -> list[dict]:
+        q = ("""query($id: ID!, $m: String!, $after: String) {
+                 issues(first: 100, after: $after, filter: { team: { id: { eq: $id } }, %s }) {
+                   nodes { %s } pageInfo { hasNextPage endCursor } } }""")
+        # projectMilestone name first; fall back to project name if none match.
+        by_ms = self.paginate(
+            q % ("projectMilestone: { name: { eq: $m } }", self.ISSUE_FIELDS),
+            {"id": team_id, "m": milestone}, "issues",
+        )
+        if by_ms:
+            return by_ms
+        return self.paginate(
+            q % ("project: { name: { eq: $m } }", self.ISSUE_FIELDS),
+            {"id": team_id, "m": milestone}, "issues",
+        )
+
+    def team_labels(self, team_id: str) -> dict[str, str]:
+        nodes = self.paginate(
+            """query($id: String!, $after: String) { team(id: $id) {
+                 labels(first: 250, after: $after) {
+                   nodes { id name } pageInfo { hasNextPage endCursor } } } }""",
+            {"id": team_id}, "team", "labels",
+        )
+        return {n["name"]: n["id"] for n in nodes}
+
+    def comments(self, issue_uuid: str) -> list[dict]:
+        nodes = self.paginate(
+            """query($id: String!, $after: String) { issue(id: $id) {
+                 comments(first: 50, after: $after) {
+                   nodes { body user { name } } pageInfo { hasNextPage endCursor } } } }""",
+            {"id": issue_uuid}, "issue", "comments",
+        )
+        return [{"user": (n.get("user") or {}).get("name"), "body": n.get("body", "")} for n in nodes]
+
+    # -- writes --------------------------------------------------------------
+
+    def create_label(self, team_id: str, name: str) -> str:
+        """Create a label, reusing an existing one on a name collision.
+
+        team.labels() cannot see workspace-level labels, so a name colliding
+        with a workspace default reaches here as a 'duplicate label name'
+        error rather than showing up in the team fetch. Reuse it instead of
+        failing — reintroducing the publish-linear v0.5.0 bug would create a
+        second team label shadowing the workspace one."""
+        try:
+            data = self.gql(
+                """mutation($input: IssueLabelCreateInput!) {
+                     issueLabelCreate(input: $input) { issueLabel { id } } }""",
+                {"input": {"teamId": team_id, "name": name}},
+            )
+            return data["issueLabelCreate"]["issueLabel"]["id"]
+        except RuntimeError as e:
+            msg = str(e).lower()
+            if "duplicate label name" not in msg and "already exists" not in msg:
+                raise
+            found = self.gql(
+                """query($n: String!) {
+                     issueLabels(filter: { name: { eqIgnoreCase: $n } }) {
+                       nodes { id name } } }""",
+                {"n": name},
+            )["issueLabels"]["nodes"]
+            if not found:
+                raise
+            exact = next((n for n in found if n["name"] == name), None)
+            return (exact or found[0])["id"]
+
+    def resolve_labels(self, team_id: str, names: list[str]) -> list[str]:
+        existing = self.team_labels(team_id)
+        ids = []
+        for name in names:
+            lid = existing.get(name)
+            if lid is None:
+                lid = self.create_label(team_id, name)
+                existing[name] = lid
+            ids.append(lid)
+        return ids
+
+    def create_issue(self, inp: dict) -> dict:
+        data = self.gql(
+            """mutation($input: IssueCreateInput!) {
+                 issueCreate(input: $input) { issue { id identifier url } } }""",
+            {"input": inp},
+        )
+        return data["issueCreate"]["issue"]
+
+    def update_issue(self, issue_uuid: str, inp: dict) -> None:
+        self.gql(
+            """mutation($id: String!, $input: IssueUpdateInput!) {
+                 issueUpdate(id: $id, input: $input) { success } }""",
+            {"id": issue_uuid, "input": inp},
+        )
+
+    def add_comment(self, issue_uuid: str, body: str) -> None:
+        self.gql(
+            """mutation($input: CommentCreateInput!) {
+                 commentCreate(input: $input) { success } }""",
+            {"input": {"issueId": issue_uuid, "body": body}},
+        )
+
+    def create_relation(self, blocker_uuid: str, blocked_uuid: str) -> None:
+        try:
+            self.gql(
+                """mutation($input: IssueRelationCreateInput!) {
+                     issueRelationCreate(input: $input) { success } }""",
+                {"input": {"issueId": blocker_uuid, "relatedIssueId": blocked_uuid, "type": "blocks"}},
+            )
+        except RuntimeError as e:
+            if "already exists" in str(e).lower() or "duplicate" in str(e).lower():
+                return
+            raise
+
+
+# ---------------------------------------------------------------------------
+# Pure helpers — canonical model rendering & status mapping
+# ---------------------------------------------------------------------------
+
+def split_identifier(identifier: str) -> tuple[str, float]:
+    m = re.fullmatch(r"([A-Za-z][A-Za-z0-9]*)-(\d+)", identifier.strip())
+    if not m:
+        usage_error(f"{identifier!r} is not a Linear identifier like 'ABC-123'")
+    return m.group(1).upper(), float(m.group(2))
+
+
+def canonical_status(state: dict | None) -> str | None:
+    """Map a Linear workflow state to a canonical status by TYPE, with name
+    heuristics only where Linear has no distinct type (review, blocked)."""
+    if not state:
+        return None
+    name = (state.get("name") or "").lower()
+    typ = state.get("type")
+    if "block" in name:
+        return "blocked"
+    if typ == "completed":
+        return "done"
+    if typ == "canceled":
+        return "canceled"  # not a canonical status, but honest to report
+    if typ == "started":
+        return "in_review" if "review" in name else "in_progress"
+    return "todo"  # unstarted, backlog, triage
+
+
+def pick_state(canonical: str, states: list[dict]) -> dict | None:
+    """Resolve a canonical status to a concrete workflow state by type. Returns
+    None for `blocked` when no Blocked-like state exists (caller falls back to a
+    label)."""
+    def first(pred):
+        return next((s for s in states if pred(s)), None)
+
+    def nm(s):
+        return (s.get("name") or "").lower()
+
+    if canonical == "done":
+        return (first(lambda s: s["type"] == "completed" and "cancel" not in nm(s))
+                or first(lambda s: s["type"] == "completed"))
+    if canonical == "todo":
+        return (first(lambda s: s["type"] == "unstarted")
+                or first(lambda s: s["type"] == "backlog")
+                or first(lambda s: s["type"] == "triage"))
+    if canonical == "in_progress":
+        return (first(lambda s: s["type"] == "started" and "review" not in nm(s) and "block" not in nm(s))
+                or first(lambda s: s["type"] == "started"))
+    if canonical == "in_review":
+        return (first(lambda s: s["type"] == "started" and "review" in nm(s))
+                or first(lambda s: s["type"] == "started" and "block" not in nm(s))
+                or first(lambda s: s["type"] == "started"))
+    if canonical == "blocked":
+        return first(lambda s: "block" in nm(s))  # may be None -> label fallback
+    usage_error(f"unknown status {canonical!r}; use one of {', '.join(CANONICAL_STATUSES)}")
+
+
+def parse_acceptance_criteria(description: str) -> list[str]:
+    out, in_section = [], False
+    for line in (description or "").splitlines():
+        if re.match(r"^#{1,6}\s", line):
+            in_section = bool(re.search(r"acceptance criteria", line, re.IGNORECASE))
+            continue
+        if in_section:
+            m = re.match(r"^\s*[-*]\s+(?:\[[ xX]\]\s+)?(.*\S)", line)
+            if m:
+                out.append(m.group(1).strip())
+    return out
+
+
+def parse_modules_line(description: str) -> list[str]:
+    m = re.search(r"^\s*Modules:\s*(.+)$", description or "", re.MULTILINE)
+    if not m:
+        return []
+    return [x.strip() for x in re.split(r"[,\s]+", m.group(1)) if x.strip()]
+
+
+def dependencies_of(issue: dict) -> list[str]:
+    """Identifiers this issue is blocked by: inverse 'blocks' relations."""
+    deps = []
+    for n in (issue.get("inverseRelations") or {}).get("nodes", []):
+        if n.get("type") == "blocks" and n.get("issue"):
+            deps.append(n["issue"]["identifier"])
+    return sorted(set(deps))
+
+
+def canonical_ticket(issue: dict, *, full: bool = True, comments: list | None = None) -> dict:
+    labels = [n["name"] for n in (issue.get("labels") or {}).get("nodes", [])]
+    tier = next((l.split(":", 1)[1] for l in labels if l.startswith("tier:")), None)
+    modules = [l.split(":", 1)[1] for l in labels if l.startswith("mod:")]
+    resources = [l.split(":", 1)[1] for l in labels if l.startswith("resource:")]
+    other = [l for l in labels if not l.startswith(MANAGED_LABEL_PREFIXES)]
+    description = issue.get("description") or ""
+    if not modules:
+        modules = parse_modules_line(description)
+
+    out = {
+        "id": issue["identifier"],
+        "title": issue.get("title"),
+        "status": canonical_status(issue.get("state")),
+        "tier": tier,
+        "modules": modules,
+        "resources": resources,
+        "milestone": (issue.get("projectMilestone") or {}).get("name")
+        or (issue.get("project") or {}).get("name"),
+    }
+    if full:
+        out["labels"] = other
+        out["dependencies"] = dependencies_of(issue)
+        out["acceptance_criteria"] = parse_acceptance_criteria(description)
+        out["description"] = description
+    if comments is not None:
+        out["comments"] = comments
+    return out
+
+
+def emit(obj):
+    print(json.dumps(obj, ensure_ascii=False, separators=(",", ":")))
+
+
+# ---------------------------------------------------------------------------
+# Config & client bootstrap
+# ---------------------------------------------------------------------------
+
+def load_config() -> dict:
+    path = Path(".dev-orchestrator/config.json")
+    if not path.is_file():
+        return {}
+    try:
+        return json.loads(path.read_text()) or {}
+    except (OSError, json.JSONDecodeError) as e:
+        usage_error(f"reading {path}: {e}")
+
+
+def client() -> Linear:
+    api_key = os.environ.get("LINEAR_API_KEY")
+    if not api_key:
+        usage_error("LINEAR_API_KEY is not set")
+    return Linear(api_key)
+
+
+def resolve_team_ref(explicit: str | None) -> str:
+    if explicit:
+        return explicit
+    team = (load_config().get("linear") or {}).get("team")
+    if not team:
+        usage_error("no team: pass --team or set linear.team in .dev-orchestrator/config.json")
+    return team
+
+
+# ---------------------------------------------------------------------------
+# Subcommands
+# ---------------------------------------------------------------------------
+
+def cmd_list(args):
+    api = client()
+    team = api.team(resolve_team_ref(args.team))
+    issues = api.issues_for_milestone(team["id"], args.milestone)
+    rows = [canonical_ticket(i, full=False) for i in issues]
+    if args.status:
+        rows = [r for r in rows if r["status"] == args.status]
+    if args.label:
+        wanted = args.label
+        rows = [r for r, i in zip(rows, issues)
+                if wanted in [n["name"] for n in (i.get("labels") or {}).get("nodes", [])]]
+    emit(rows)
+
+
+def cmd_get(args):
+    api = client()
+    issue = api.issue_by_identifier(args.id)
+    comments = None
+    if args.comments:
+        # need the UUID for the comments query
+        comments = api.comments(issue["id"])
+    emit(canonical_ticket(issue, full=True, comments=comments))
+
+
+def cmd_create(args):
+    api = client()
+    team = api.team(resolve_team_ref(args.team))
+    description = Path(args.description_file).read_text() if args.description_file else ""
+    inp = {"teamId": team["id"], "title": args.title, "description": description}
+    if args.labels:
+        names = [x.strip() for x in args.labels.split(",") if x.strip()]
+        inp["labelIds"] = api.resolve_labels(team["id"], names)
+    issue = api.create_issue(inp)
+    emit({"id": issue["identifier"], "url": issue["url"]})
+
+
+def cmd_update(args):
+    api = client()
+    issue = api.issue_by_identifier(args.id)
+    team_id_needed = bool(args.labels)
+    inp = {}
+    if args.title:
+        inp["title"] = args.title
+    if args.description_file:
+        inp["description"] = Path(args.description_file).read_text()
+    if args.labels is not None:
+        team_key, _ = split_identifier(args.id)
+        team = api.team(team_key)
+        names = [x.strip() for x in args.labels.split(",") if x.strip()]
+        # preserve human labels outside managed namespaces; replace managed ones
+        kept = [n["name"] for n in (issue.get("labels") or {}).get("nodes", [])
+                if not n["name"].startswith(MANAGED_LABEL_PREFIXES)]
+        keep_set = list(dict.fromkeys(names + kept))
+        inp["labelIds"] = api.resolve_labels(team["id"], keep_set)
+    if not inp:
+        usage_error("update needs at least one of --title / --description-file / --labels")
+    api.update_issue(issue["id"], inp)
+    emit({"id": issue["identifier"], "updated": sorted(inp.keys())})
+
+
+def cmd_set_status(args):
+    if args.status not in CANONICAL_STATUSES:
+        usage_error(f"status must be one of {', '.join(CANONICAL_STATUSES)}")
+    api = client()
+    team_key, _ = split_identifier(args.id)
+    team = api.team(team_key)
+    issue = api.issue_by_identifier(args.id)
+    states = (team.get("states") or {}).get("nodes", [])
+    state = pick_state(args.status, states)
+    if state is not None:
+        api.update_issue(issue["id"], {"stateId": state["id"]})
+        emit({"id": issue["identifier"], "status": args.status, "state": state["name"]})
+        return
+    if args.status == "blocked":
+        # fallback: no Blocked-like workflow state — mark with a label + comment
+        label_ids = api.resolve_labels(team["id"], ["blocked"])
+        current = [n["id"] for n in (issue.get("labels") or {}).get("nodes", [])]
+        api.update_issue(issue["id"], {"labelIds": sorted(set(current + label_ids))})
+        api.add_comment(issue["id"], "🚧 Marked **blocked** (team has no Blocked workflow state).")
+        emit({"id": issue["identifier"], "status": "blocked", "state": "label:blocked"})
+        return
+    runtime_error(f"team {team['key']} has no workflow state for status {args.status!r}")
+
+
+def cmd_comment(args):
+    api = client()
+    issue = api.issue_by_identifier(args.id)
+    api.add_comment(issue["id"], Path(args.body_file).read_text())
+    emit({"id": issue["identifier"], "commented": True})
+
+
+def cmd_add_dependency(args):
+    api = client()
+    blocked = api.issue_by_identifier(args.id)
+    blocker = api.issue_by_identifier(args.blocked_by)
+    api.create_relation(blocker["id"], blocked["id"])
+    emit({"id": blocked["identifier"], "blocked_by": blocker["identifier"]})
+
+
+def build_parser() -> argparse.ArgumentParser:
+    ap = argparse.ArgumentParser(prog="tracker", description="Script-first Linear ticket I/O.")
+    sub = ap.add_subparsers(dest="cmd", required=True)
+
+    p = sub.add_parser("list", help="list tickets in a milestone (compact canonical JSON)")
+    p.add_argument("--milestone", required=True)
+    p.add_argument("--status", choices=CANONICAL_STATUSES)
+    p.add_argument("--label")
+    p.add_argument("--team")
+    p.add_argument("--json", action="store_true", help="accepted for symmetry; output is always JSON")
+    p.set_defaults(func=cmd_list)
+
+    p = sub.add_parser("get", help="get one ticket, incl. dependencies")
+    p.add_argument("id")
+    p.add_argument("--comments", action="store_true")
+    p.set_defaults(func=cmd_get)
+
+    p = sub.add_parser("create", help="create a ticket")
+    p.add_argument("--title", required=True)
+    p.add_argument("--description-file")
+    p.add_argument("--labels", help="comma-separated label names (created if missing)")
+    p.add_argument("--team")
+    p.set_defaults(func=cmd_create)
+
+    p = sub.add_parser("update", help="update a ticket's title/description/labels")
+    p.add_argument("id")
+    p.add_argument("--title")
+    p.add_argument("--description-file")
+    p.add_argument("--labels", help="comma-separated managed label names")
+    p.set_defaults(func=cmd_update)
+
+    p = sub.add_parser("set-status", help="set canonical status")
+    p.add_argument("id")
+    p.add_argument("status", help="|".join(CANONICAL_STATUSES))
+    p.set_defaults(func=cmd_set_status)
+
+    p = sub.add_parser("comment", help="post a markdown comment")
+    p.add_argument("id")
+    p.add_argument("--body-file", required=True)
+    p.set_defaults(func=cmd_comment)
+
+    p = sub.add_parser("add-dependency", help="record a blocked-by relation")
+    p.add_argument("id")
+    p.add_argument("--blocked-by", required=True)
+    p.set_defaults(func=cmd_add_dependency)
+    return ap
+
+
+def main():
+    args = build_parser().parse_args()
+    try:
+        args.func(args)
+    except RuntimeError as e:
+        runtime_error(str(e))
+
+
+if __name__ == "__main__":
+    main()

@@ -5,13 +5,31 @@ description: Tracker-neutral ticket operations for the dev-orchestrator fleet. U
 
 # Tracker — neutral ticket operations
 
-All dev-orchestrator components speak this canonical model. An **adapter** maps it onto a concrete tracker's tools. Nothing outside the adapter file may reference tracker-specific tool names.
+All dev-orchestrator components speak this canonical model. Operations run **script-first**: a small CLI (`bin/tracker`) implements the canonical operations against the tracker's API, emitting compact canonical JSON and keeping bulky tracker payloads out of the orchestrator's context. An **adapter** documents the same mapping for the fallback path (model-driven MCP calls) when no API key is available. Nothing outside `bin/tracker` and the adapter file may reference tracker-specific tool names or API shapes.
 
-## Adapter resolution
+## How to run an operation
 
-1. Read `.dev-orchestrator/config.json` in the repo root; use its `"tracker"` value (e.g. `"linear"`).
-2. No config → default to `linear`.
-3. Load the adapter: read `adapters/<tracker>.md` **in this skill's directory** and follow its mappings for every operation below. If the adapter's MCP tools are not connected, stop and tell the user which tracker/server is missing.
+1. Read `.dev-orchestrator/config.json` in the repo root; use its `"tracker"` value (e.g. `"linear"`; no config → default `linear`).
+2. **Script path (preferred).** For `linear`, call `bin/tracker` via Bash when `LINEAR_API_KEY` is set:
+   ```
+   python3 "${CLAUDE_PLUGIN_ROOT}/bin/tracker" <subcommand> ...
+   ```
+   It prints canonical JSON to stdout (one compact object/array), exits non-zero on error. This is the path to use in orchestrated and headless/cron runs — it needs no MCP session. See the subcommand list below.
+3. **Adapter fallback.** If no API key is set (or the tracker has no script), read `adapters/<tracker>.md` **in this skill's directory** and drive the operation through its MCP mappings. If the adapter's MCP tools are not connected either, stop and tell the user which tracker/server or key is missing.
+
+## `bin/tracker` subcommands (Linear)
+
+```
+tracker list --milestone <name> [--status s] [--label l] [--team K]   # light canonical rows
+tracker get <id> [--comments]                                         # full ticket incl. dependencies
+tracker create --title T --description-file F [--labels a,b] [--team K]
+tracker update <id> [--title T] [--description-file F] [--labels a,b]
+tracker set-status <id> <todo|in_progress|in_review|done|blocked>
+tracker comment <id> --body-file <md>
+tracker add-dependency <id> --blocked-by <id>
+```
+
+Auth: `LINEAR_API_KEY`. Team for `list`/`create`: `--team`, else `linear.team` in `.dev-orchestrator/config.json`. The script owns status mapping (by state *type*) and label conventions (`tier:`/`mod:`/`resource:`, create-if-missing) — callers don't re-derive them.
 
 ## Canonical ticket model
 

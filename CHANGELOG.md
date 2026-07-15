@@ -10,6 +10,20 @@ release body for that version's tag.
 
 ## [Unreleased]
 
+### Added
+- **Commit-gate preflight** (`scripts/ensure_env.py`, wired into `/orchestrate` Phase 1): ensures the target repo runs its local CI checks before every commit by installing a shared `pre-commit` hook via `core.hooksPath=.githooks` (committable, so the whole team gets it — not a Claude-session-only plugin hook). Idempotent and ledger-backed: records what it set up in `.dev-orchestrator/environment.json` and fast-paths on later runs, verifying by sha so a stale or hand-edited hook is detected and re-offered. `--check` probes without writing; the checks command is auto-detected (npm `ci`/`check`/composed scripts, or pytest) and overridable via `--checks-command` or the ledger. Never installs without consent.
+- **Script-first tracker CLI** (`bin/tracker`, MKR-439): a stdlib-only (no `requests`) Linear GraphQL client exposing the canonical tracker operations as subcommands — `list`, `get`, `create`, `update`, `set-status`, `comment`, `add-dependency` — that emit compact canonical JSON. Replaces model-mediated MCP ticket I/O on the per-ticket hot path (fewer tokens, no MCP schemas loaded) and works in headless/cron runs with no authenticated MCP session. Resolves canonical status by workflow-state *type* (never hardcoded state names), with a `blocked` label+comment fallback for teams that have no Blocked state, and reuses workspace-level labels on a name collision (the publish-linear v0.5.0 bug, not reintroduced). The MCP adapter stays as a documented fallback when `LINEAR_API_KEY` is unset.
+- **Combined `simple-gate`** (`agents/simple-gate.md`, MKR-442): for `tier:simple` tickets, one Sonnet gate carrying both the qa-verifier and code-reviewer rubrics replaces two separate gate dispatches; a single verdict, counted as one gate on the retry ladder. Escalation past the simple tier restores the full scope→QA→review chain.
+- Test suite (`tests/`, `pytest.ini`): 77 subprocess-driven tests covering every runtime script and hook (`validate_plan`, `clean`, `dispatch_policy`, `agent_budget`, `log_usage`, `report`, `ensure_env`, `check_changelog`, `notify_update`) plus the `bin/tracker` CLI (against a mock GraphQL server). Run with `uvx --with pytest pytest`.
+
+### Changed
+- **Dispatch by file path, not payload** (MKR-440): the milestone-orchestrator materializes each ticket to `<run-dir>/tickets/<id>.md` once and dispatches `TICKET_FILE:` paths instead of inlining ticket bodies on every dispatch and retry; gates write full findings to `<run-dir>/gates/…` and return only a verdict + ≤3-line summary. Orchestrator context growth drops from O(tickets × artifacts) to O(tickets). The dispatch-policy hook now also denies fleet ticket dispatches missing a `TICKET_FILE:` line pointing into the run dir.
+- **Evidence-bearing implementer reports** (MKR-441): the implementer writes a structured report (real diffstat, per-criterion evidence, command outputs, touched-files rationale) to `<run-dir>/reports/…`; scope-guardian, qa-verifier, and code-reviewer verify against it and open source files only on mismatch, instead of each re-exploring from scratch. qa-verifier still runs everything itself and fails a "report/reality mismatch" outright.
+- **Close-out discipline** (MKR-443): the milestone-orchestrator reduces each completed ticket to a one-line record and sources the end-of-milestone summary from the run log, instead of carrying finished tickets' dispatch/gate/retry traffic forward and re-sending it every turn.
+
+### Fixed
+- `clean.py` now normalizes the `current-run` pointer with `abspath` before matching it against run directories, so an absolute pointer (already accepted by the budget/dispatch/usage scripts) is handled consistently. Previously an absolute pointer was mis-read as a stale pointer, and — because the active-run match returned nothing — the guard protecting the active run was bypassed, so `--all`/`--keep 0` could delete the in-progress run.
+
 ## [0.3.0] — 2026-07-14
 
 ### Added

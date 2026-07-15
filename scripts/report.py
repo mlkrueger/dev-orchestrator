@@ -17,7 +17,8 @@ from datetime import datetime, timedelta
 PLUGIN_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 # Gate agents emit per-gate vocabularies (scope: PASS|PASS_WITH_NOTES|FAIL,
-# qa: PASS|FAIL, review: APPROVE|REQUEST_CHANGES) — normalize before counting.
+# qa: PASS|FAIL, review: APPROVE|REQUEST_CHANGES, simple: PASS|FAIL) — normalize
+# before counting. Gate names are dynamic, so new gates need no change here.
 PASS_VERDICTS = {"PASS", "PASS_WITH_NOTES", "APPROVE"}
 FAIL_VERDICTS = {"FAIL", "REQUEST_CHANGES"}
 

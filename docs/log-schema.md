@@ -2,6 +2,8 @@
 
 Each run owns a directory: `.dev-orchestrator/runs/<run-id>/` in the target repo, containing `meta.json` (run parameters) and `log.jsonl` — an **append-only** event log. `.dev-orchestrator/current-run` holds the active run dir path; the usage hook and helper scripts no-op when it is absent.
 
+`.dev-orchestrator/environment.json` is a per-clone **setup ledger** (not per-run) written by the commit-gate preflight (`scripts/ensure_env.py`). It records `checks_command` and, under `setup.git_hooks`, whether the shared `pre-commit` gate is installed plus its `hook_sha`. The preflight reads it to fast-path: installed + matching sha ⇒ nothing to do; missing or drifted sha ⇒ re-offer. It is machine-local state (gitignored like the rest of `.dev-orchestrator/`); the gate it installs — `.githooks/pre-commit`, wired via `core.hooksPath` — is the committed, shared artifact.
+
 Every line is one JSON object with at least `ts` (UTC ISO-8601, e.g. `2026-07-05T14:03:22Z`) and `event`.
 
 ## Events written by orchestrators (via `scripts/log_event.sh`)
@@ -11,7 +13,7 @@ Every line is one JSON object with at least `ts` (UTC ISO-8601, e.g. `2026-07-05
 | `run_start` | `run`, `branch`, `milestones`, `tickets` | Run initialized, branch created |
 | `milestone_start` | `milestone`, `tickets` | Before spawning a milestone-orchestrator |
 | `dispatch` | `ticket`, `agent`, `model`, `attempt`, `tier` | Every subagent dispatch |
-| `gate` | `ticket`, `gate` (`scope`\|`qa`\|`review`), `verdict` (verbatim from the gate agent — scope: `PASS`\|`PASS_WITH_NOTES`\|`FAIL`, qa: `PASS`\|`FAIL`, review: `APPROVE`\|`REQUEST_CHANGES`), `detail` | Every gate verdict. `report.py` normalizes: `PASS`/`PASS_WITH_NOTES`/`APPROVE` count as pass, `FAIL`/`REQUEST_CHANGES` as fail; anything else is surfaced as nonstandard. |
+| `gate` | `ticket`, `gate` (`scope`\|`qa`\|`review`\|`simple`), `verdict` (verbatim from the gate agent — scope: `PASS`\|`PASS_WITH_NOTES`\|`FAIL`, qa: `PASS`\|`FAIL`, review: `APPROVE`\|`REQUEST_CHANGES`, simple: `PASS`\|`FAIL`), `detail` | Every gate verdict. `simple` is the combined verify+review gate for `tier:simple` tickets. `report.py` normalizes: `PASS`/`PASS_WITH_NOTES`/`APPROVE` count as pass, `FAIL`/`REQUEST_CHANGES` as fail; anything else is surfaced as nonstandard. |
 | `escalate` | `ticket`, `from`, `to`, `reason` | Tier escalation after 2 failed attempts |
 | `commit` | `ticket`, `sha`, `files` | Per-ticket commit made |
 | `ticket_done` | `ticket`, `attempts`, `final_tier` | Ticket passed all gates and committed |
@@ -56,4 +58,4 @@ A `usage_warning` with reason "no usage entries parsed from transcript" means th
 
 ## Correlation contract
 
-The hook cannot see which ticket a subagent served — correlation relies on the dispatch prompt carrying `TICKET: <id>` on its own line (implementers and gate agents) or `MILESTONE: <name>` (milestone-orchestrators). This is no longer honor-system: the `dispatch_policy.py` PreToolUse hook **denies** fleet dispatches missing the line while a run is active. The same hook enforces model policy — an Opus implementer/code-reviewer dispatch requires a `TIER: complex` or `ESCALATED: <from-tier>` line, and Fable-class models are denied for all fleet agents. It fails open on internal errors and stays inert when no run is active (`.dev-orchestrator/current-run` absent).
+The hook cannot see which ticket a subagent served — correlation relies on the dispatch prompt carrying `TICKET: <id>` on its own line (implementers and gate agents) or `MILESTONE: <name>` (milestone-orchestrators). This is no longer honor-system: the `dispatch_policy.py` PreToolUse hook **denies** fleet dispatches missing the line while a run is active. Fleet ticket dispatches must also carry a `TICKET_FILE: <path>` line pointing into the run dir — the orchestrator writes each ticket to `<run-dir>/tickets/<id>.md` once and dispatches the path, not the body, keeping ticket text out of the orchestrator's context. The same hook enforces model policy — an Opus implementer/code-reviewer dispatch requires a `TIER: complex` or `ESCALATED: <from-tier>` line, and Fable-class models are denied for all fleet agents. It fails open on internal errors and stays inert when no run is active (`.dev-orchestrator/current-run` absent).
