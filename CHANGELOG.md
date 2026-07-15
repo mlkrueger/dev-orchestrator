@@ -10,6 +10,8 @@ release body for that version's tag.
 
 ## [Unreleased]
 
+## [0.4.1] — 2026-07-15
+
 ### Added
 - **Phase-aware orchestrator respawn** (MKR-444): the milestone-orchestrator now bounds its own context instead of growing with milestone size. It completes a slice — `orchestrator_respawn_tickets` completed tickets (config, default 10) or a `phase:K` boundary — then hands off to a fresh successor rather than degrading. The successor reconstructs the remaining work from the run log via `scripts/remaining_work.py` (done/blocked/remaining math, no context handoff, no ticket processed twice). `/orchestrate` auto-continues the same milestone **without a user check-in** on the `NOT ATTEMPTED — respawn (context budget)` signal (still pausing for blocked/decisions), with a no-forward-progress safety valve. Milestones stay whole; only *execution* is sliced. `dispatch`/`gate`/`ticket_done` log events now carry `milestone`/`phase`; `report.py` surfaces respawn counts; ticket-smith flags oversized milestones at grooming. Phase support degrades to pure count-respawn when tickets carry no `phase:K` labels.
 
