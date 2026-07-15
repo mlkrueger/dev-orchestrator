@@ -10,6 +10,8 @@ release body for that version's tag.
 
 ## [Unreleased]
 
+## [0.4.0] — 2026-07-15
+
 ### Added
 - **Commit-gate preflight** (`scripts/ensure_env.py`, wired into `/orchestrate` Phase 1): ensures the target repo runs its local CI checks before every commit by installing a shared `pre-commit` hook via `core.hooksPath=.githooks` (committable, so the whole team gets it — not a Claude-session-only plugin hook). Idempotent and ledger-backed: records what it set up in `.dev-orchestrator/environment.json` and fast-paths on later runs, verifying by sha so a stale or hand-edited hook is detected and re-offered. `--check` probes without writing; the checks command is auto-detected (npm `ci`/`check`/composed scripts, or pytest) and overridable via `--checks-command` or the ledger. Never installs without consent.
 - **Script-first tracker CLI** (`bin/tracker`, MKR-439): a stdlib-only (no `requests`) Linear GraphQL client exposing the canonical tracker operations as subcommands — `list`, `get`, `create`, `update`, `set-status`, `comment`, `add-dependency` — that emit compact canonical JSON. Replaces model-mediated MCP ticket I/O on the per-ticket hot path (fewer tokens, no MCP schemas loaded) and works in headless/cron runs with no authenticated MCP session. Resolves canonical status by workflow-state *type* (never hardcoded state names), with a `blocked` label+comment fallback for teams that have no Blocked state, and reuses workspace-level labels on a name collision (the publish-linear v0.5.0 bug, not reintroduced). The MCP adapter stays as a documented fallback when `LINEAR_API_KEY` is unset.
