@@ -104,8 +104,12 @@ def main():
 
     runs = collect_runs()
     pointer = read_pointer()
-    pointer_norm = os.path.normpath(pointer) if pointer else None
-    active = next((r for r in runs if os.path.normpath(r["path"]) == pointer_norm), None)
+    # The pointer may be stored relative (as orchestrate.md writes it) or
+    # absolute (as the other scripts' resolvers accept). abspath normalizes
+    # both to an absolute path so the active-run match — and the guard that
+    # protects the active run from deletion — works either way.
+    pointer_norm = os.path.abspath(pointer) if pointer else None
+    active = next((r for r in runs if os.path.abspath(r["path"]) == pointer_norm), None)
     stale_pointer = pointer is not None and active is None
 
     listing_only = keep is None and older_than is None and not delete_all and not explicit

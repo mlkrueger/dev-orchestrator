@@ -12,7 +12,13 @@ Arguments: `$ARGUMENTS`
 1. Confirm this is a git repository with a clean working tree (`git status --porcelain`). Dirty tree → stop and ask the user.
 2. Check what model THIS session is running on. If it is a Fable-class model, warn the user before anything else: this context lives for the whole run and is resent every turn, making it the most expensive seat in the system for what is coordination work — recommend they switch (`/model opus` or `/model sonnet`) and restart the command. Proceed only if they explicitly accept the cost.
 3. Load the `dev-orchestrator:tracker` skill (Skill tool). Read `.dev-orchestrator/config.json` if present.
-4. From the arguments, resolve the target project/milestones via the tracker. No argument → list available milestones with open tickets and ask the user to pick.
+4. **Commit-gate preflight.** Implementers commit per ticket and humans commit later — nothing should land unlinted/untested. Probe the repo's local-checks gate (fast, writes nothing): `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/ensure_env.py" --check --json`. Branch on `status`:
+   - `ok` or `skipped` → the gate is already current (or this isn't a git repo); say so in one line and move on. This is the common fast path — the ledger (`.dev-orchestrator/environment.json`) makes it cheap.
+   - `would_install` / `would_update_drift` → tell the user what checks command it detected and that it will wire a shared `pre-commit` hook via `core.hooksPath=.githooks`. On approval, run it for real: `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/ensure_env.py" --json` (add `--checks-command "<cmd>"` if the user wants a different command). Remind them to commit `.githooks/pre-commit` so teammates get the same gate.
+   - `needs_command` → the detector couldn't find a checks command. Ask the user for one and re-run with `--checks-command "<cmd>"`, or proceed without the gate if they decline (note the reduced safety).
+
+   Never install without consent — this modifies the repo (writes `.githooks/`, sets git config). Fails open: a preflight error must not block the run.
+5. From the arguments, resolve the target project/milestones via the tracker. No argument → list available milestones with open tickets and ask the user to pick.
 
 ## Phase 2 — Readiness
 
