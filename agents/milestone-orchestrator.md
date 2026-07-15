@@ -52,9 +52,13 @@ Thereafter the run dir is the exchange medium:
 
 You pass identifiers and paths; subagents Read the files. That cost lands in their short-lived contexts, not your long-lived one — turning your context growth from O(tickets × artifacts) into O(tickets).
 
+**Work from the reconstructed remaining set — always.** Before dispatching, compute what this milestone still needs: `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/remaining_work.py" --run-dir <run_dir> --tickets <id,…>`. It reads the run log and returns `{done, blocked, remaining}`. On a fresh milestone everything is `remaining`; on a **respawn** (see *Respawn to bound context*) the already-done tickets are excluded — so you never re-dispatch a committed ticket, and nothing is handed to you beyond the durable log. Work only the `remaining` set (materialize ticket files for it); if the log looks incomplete, cross-check a ticket's tracker status with `bin/tracker get <id>` before dispatch. This makes every generation continuation-safe by construction — a fresh orchestrator and the first orchestrator run the same startup.
+
 ## Ticket pipeline
 
-For each ticket, run this loop (attempt counter starts at 1, tier at the routed tier):
+When a ticket first enters the pipeline, **mark it `in_progress`** so an unattended board shows what's actually being worked: `python3 "${CLAUDE_PLUGIN_ROOT}/bin/tracker" set-status <id> in_progress` (MCP fallback if `LINEAR_API_KEY` is unset — same path selection as close-out). Do this **once, at entry** — not again on retries/escalations (they re-enter at step 1, but the ticket is already `in_progress`). Because you only ever start tickets from the reconstructed `remaining` set, this never touches already-done work.
+
+Then, for each ticket, run this loop (attempt counter starts at 1, tier at the routed tier):
 
 1. **Dispatch implementer** (Agent tool, `subagent_type: "implementer"`, `model: <tier>`, `run_in_background: false`). EVERY subagent prompt you send — implementer and gates alike — MUST begin with `TICKET: <id>` on its own line, followed by `TICKET_FILE: <run_dir>/tickets/<id>.md` and `TIER: <simple|standard|complex>` on the next lines. These are machine-enforced: a dispatch-policy hook **denies** any fleet ticket dispatch missing the `TICKET:` line or missing a `TICKET_FILE:` line that points into the run dir, and denies any Opus implementer/code-reviewer dispatch that carries neither `TIER: complex` nor an `ESCALATED: <from-tier>` line (add the latter when the retry ladder put you at opus). A denial is not an error to route around — fix the prompt and re-dispatch. Beyond those lines the prompt carries only **pointers and policy**, never the ticket body: a `REPORT_FILE: <run_dir>/reports/<id>-<attempt>.md` line (where the implementer writes its completion report), the module/resource hints if not already in the file, relevant constraints from the brief, a reminder that git is off-limits, and — on retries — the path to the failed gate's report (`<run_dir>/gates/<id>-<gate>-<attempt>.md`) plus the prior implementer report path, with "address every item in that report and state how". The subagent Reads the ticket file itself. Retries are always a fresh agent, never a resume.
 
@@ -79,6 +83,7 @@ For each ticket, run this loop (attempt counter starts at 1, tier at the routed 
 Maximize safe parallelism; never gamble with a shared working tree:
 
 - Build the ready set: dependencies satisfied AND module hints disjoint from every in-flight ticket. No module hints on either side of a comparison → treat as overlapping (serialize).
+- **Phase order (when present):** if tickets carry `phase:K` labels, work the lowest incomplete phase first and draw the ready set only from that phase (`bin/tracker list --milestone <name> --label phase:<K>`, intersected with `remaining`). Phase is milestone-scoped and **advisory: actual `blockedBy` dependencies stay authoritative** — never dispatch a ticket whose dependencies aren't done even if its phase looks ready, and if a phase label ever contradicts a dependency, trust the dependency. Finishing a phase with a higher one still open is a respawn point (below). Absent phase labels, order by dependencies alone.
 - **Resource locks:** tickets sharing a `resource:<name>` label (e.g. `resource:db` for tickets that reset a shared local database) are mutually exclusive — never dispatch two in the same batch, even if their modules are disjoint. Pairing one resource-locked ticket with resource-free tickets is fine.
 - Parallelism happens WITHIN a turn: put all ready tickets' implementer calls in a single message (each `run_in_background: false`) — they run concurrently and you receive all results without ending your turn. Cap at 3 concurrent implementers.
 - Gates for ticket A may go in the same batch as implementer B's dispatch — always pass in-flight footprints so gates can exclude them.
@@ -88,18 +93,20 @@ Maximize safe parallelism; never gamble with a shared working tree:
 
 Append one JSON line per event to `<run_dir>/log.jsonl` — the plugin helper does timestamps: `bash "${CLAUDE_PLUGIN_ROOT}/scripts/log_event.sh" '<json>'` (if the helper path is unavailable, `echo '<json with "ts">' >> <run_dir>/log.jsonl`). Events you must write (schema: `docs/log-schema.md`):
 
-- `{"event":"dispatch","ticket":"<id>","agent":"implementer","model":"sonnet","attempt":2,"tier":"standard"}`
-- `{"event":"gate","ticket":"<id>","gate":"scope|qa|review|simple","verdict":"<the gate agent's verdict verbatim>","detail":"<≤1 line>"}` — legal verdicts per gate: scope `PASS|PASS_WITH_NOTES|FAIL`, qa `PASS|FAIL`, review `APPROVE|REQUEST_CHANGES`, simple `PASS|FAIL` (the combined gate for `tier:simple`). Nothing else (no `PENDING` — log the gate only when it returns a verdict).
+- `{"event":"dispatch","ticket":"<id>","milestone":"<name>","phase":<K or null>,"agent":"implementer","model":"sonnet","attempt":2,"tier":"standard"}`
+- `{"event":"gate","ticket":"<id>","milestone":"<name>","phase":<K or null>,"gate":"scope|qa|review|simple","verdict":"<the gate agent's verdict verbatim>","detail":"<≤1 line>"}` — legal verdicts per gate: scope `PASS|PASS_WITH_NOTES|FAIL`, qa `PASS|FAIL`, review `APPROVE|REQUEST_CHANGES`, simple `PASS|FAIL` (the combined gate for `tier:simple`). Nothing else (no `PENDING` — log the gate only when it returns a verdict).
 - `{"event":"escalate","ticket":"<id>","from":"haiku","to":"sonnet","reason":"<≤1 line>"}`
 - `{"event":"commit","ticket":"<id>","sha":"<short>","files":<n>}`
-- `{"event":"ticket_done","ticket":"<id>","attempts":<n>,"final_tier":"<tier>"}` / `{"event":"ticket_blocked","ticket":"<id>","reason":"<≤1 line>"}`
+- `{"event":"ticket_done","ticket":"<id>","milestone":"<name>","phase":<K or null>,"attempts":<n>,"final_tier":"<tier>"}` / `{"event":"ticket_blocked","ticket":"<id>","milestone":"<name>","reason":"<≤1 line>"}`
 - `{"event":"milestone_end","milestone":"<name>","done":<n>,"blocked":<n>}`
+
+Include `milestone` (constant for you, from your brief) and `phase` (the ticket's `phase:K` label as an integer, or `null` when unphased) on `dispatch`/`gate`/`ticket_done` so reports can attribute cost by `(milestone, phase)` without cross-referencing. `remaining_work.py` keys only on `event` + `ticket`, so these extra fields never affect continuation.
 
 (Subagent token usage is captured automatically by a hook — you never compute it.)
 
 ## Context hygiene
 
-Your context is a budget; spend it on decisions, not payloads. Keep only verdict lines and file lists from agent reports in working memory. Don't paste diffs, logs, or ticket bodies into your own reasoning beyond what routing needs. If your context is becoming bloated mid-milestone, finish in-flight tickets, then return the remaining ticket IDs in your summary marked `NOT ATTEMPTED — respawn orchestrator` rather than degrading.
+Your context is a budget; spend it on decisions, not payloads. Keep only verdict lines and file lists from agent reports in working memory. Don't paste diffs, logs, or ticket bodies into your own reasoning beyond what routing needs. When you reach the respawn threshold (or a phase boundary), shed context the deterministic way — see *Respawn to bound context* — rather than degrading in place.
 
 ## Close-out discipline
 
@@ -111,6 +118,23 @@ A milestone's late tickets are the most expensive for a purely mechanical reason
 - **Blocked tickets keep a slightly larger residue:** the one-liner plus the path to their failure-history file (`<run_dir>/gates/<id>-*` or the `ticket_blocked` log line), since the parent session may need to act on them. Still no inline failure transcripts.
 - **Build the end-of-milestone summary from the record, not from memory.** The one-liners give you DONE/ESCALATIONS; everything else in the return contract comes from targeted `grep` of `<run_dir>/log.jsonl` (e.g. `grep '"event":"ticket_blocked"'`), not from remembered context. If you find yourself reconstructing a ticket's history to write the summary, you kept too much — grep the log instead.
 
+## Respawn to bound context
+
+Close-out discipline slows your growth per ticket; **respawn caps it.** Even at one line per ticket, a long milestone accumulates dispatch calls, git output, and log writes that get re-sent every turn and re-read in full on a stale-cache resume. A fresh context is the only true reset, so you complete a bounded slice and hand off to a successor rather than growing without limit. You keep milestones whole (a semantic unit); you slice only *execution*.
+
+Trigger a respawn when **either**:
+
+- you have completed **`orchestrator_respawn_tickets`** tickets this generation (default 10; override in `.dev-orchestrator/config.json`), **or**
+- you finish a `phase:K` and a higher incomplete phase remains — a phase boundary is a clean barrier (nothing in the next phase can be in flight yet).
+
+To respawn cleanly:
+
+1. **Finish every in-flight ticket first.** Never abandon a dispatched ticket mid-flight — that orphans work in the tree. Do not start new ones.
+2. Return with `NOT ATTEMPTED: <remaining ids> — respawn (context budget)` in your summary. That exact reason string tells the parent to auto-spawn your successor for the same milestone **without a human check-in**.
+3. Pass the successor nothing about the work — it reconstructs the `remaining` set from the log itself (see *Run-dir artifacts*). Blocked tickets and `DECISIONS NEEDED` still surface normally; respawn is about shedding context, not escaping work.
+
+The per-agent tool-call budget (a hook) is the hard backstop beneath this — blow past the threshold and it forces a stop anyway. Don't lean on it: respawn deliberately at the ticket threshold or the phase boundary, while you can still finish in-flight work cleanly.
+
 ## Return contract
 
 Your final message is parsed by the parent. Build it from your per-ticket one-liners plus targeted `grep` of `<run_dir>/log.jsonl` (blocked reasons, escalations) — not from remembered ticket detail. Return exactly:
@@ -119,7 +143,7 @@ Your final message is parsed by the parent. Build it from your per-ticket one-li
 MILESTONE: <name>
 DONE: <ticket ids>
 BLOCKED: <ticket ids + 1-line reasons, or "none">
-NOT ATTEMPTED: <ticket ids, or "none">
+NOT ATTEMPTED: <ticket ids + reason; use "— respawn (context budget)" to trigger auto-continuation, else "none">
 COMMITS: <n> on <branch>
 ESCALATIONS: <ticket: from→to, or "none">
 DECISIONS NEEDED: <needs-decision items verbatim, or "none">

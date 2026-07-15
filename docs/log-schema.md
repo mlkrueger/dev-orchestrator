@@ -12,14 +12,17 @@ Every line is one JSON object with at least `ts` (UTC ISO-8601, e.g. `2026-07-05
 |---|---|---|
 | `run_start` | `run`, `branch`, `milestones`, `tickets` | Run initialized, branch created |
 | `milestone_start` | `milestone`, `tickets` | Before spawning a milestone-orchestrator |
-| `dispatch` | `ticket`, `agent`, `model`, `attempt`, `tier` | Every subagent dispatch |
-| `gate` | `ticket`, `gate` (`scope`\|`qa`\|`review`\|`simple`), `verdict` (verbatim from the gate agent — scope: `PASS`\|`PASS_WITH_NOTES`\|`FAIL`, qa: `PASS`\|`FAIL`, review: `APPROVE`\|`REQUEST_CHANGES`, simple: `PASS`\|`FAIL`), `detail` | Every gate verdict. `simple` is the combined verify+review gate for `tier:simple` tickets. `report.py` normalizes: `PASS`/`PASS_WITH_NOTES`/`APPROVE` count as pass, `FAIL`/`REQUEST_CHANGES` as fail; anything else is surfaced as nonstandard. |
+| `dispatch` | `ticket`, `milestone`, `phase` (int, or `null` when unphased), `agent`, `model`, `attempt`, `tier` | Every subagent dispatch |
+| `gate` | `ticket`, `milestone`, `phase`, `gate` (`scope`\|`qa`\|`review`\|`simple`), `verdict` (verbatim from the gate agent — scope: `PASS`\|`PASS_WITH_NOTES`\|`FAIL`, qa: `PASS`\|`FAIL`, review: `APPROVE`\|`REQUEST_CHANGES`, simple: `PASS`\|`FAIL`), `detail` | Every gate verdict. `simple` is the combined verify+review gate for `tier:simple` tickets. `report.py` normalizes: `PASS`/`PASS_WITH_NOTES`/`APPROVE` count as pass, `FAIL`/`REQUEST_CHANGES` as fail; anything else is surfaced as nonstandard. |
 | `escalate` | `ticket`, `from`, `to`, `reason` | Tier escalation after 2 failed attempts |
 | `commit` | `ticket`, `sha`, `files` | Per-ticket commit made |
-| `ticket_done` | `ticket`, `attempts`, `final_tier` | Ticket passed all gates and committed |
-| `ticket_blocked` | `ticket`, `reason` | Ticket abandoned after opus failed twice |
+| `ticket_done` | `ticket`, `milestone`, `phase`, `attempts`, `final_tier` | Ticket passed all gates and committed |
+| `ticket_blocked` | `ticket`, `milestone`, `reason` | Ticket abandoned after opus failed twice |
+| `milestone_continue` | `milestone`, `remaining` | A milestone-orchestrator respawned to bound context; parent auto-spawned its successor (see the orchestrator's *Respawn to bound context*). `remaining` monotonically decreasing across generations — the parent stops looping if it isn't. |
 | `milestone_end` | `milestone`, `done`, `blocked` | Milestone-orchestrator finished |
 | `run_end` | `run`, `done`, `blocked` | Run closed out |
+
+`milestone`/`phase` on `dispatch`/`gate`/`ticket_done` let reports attribute cost by `(milestone, phase)`. They are ignored by `remaining_work.py` (which keys only on `event`+`ticket` for continuation), so adding them never affects respawn correctness.
 
 Keep `detail`/`reason` to one line — the log is for analytics, not transcripts.
 

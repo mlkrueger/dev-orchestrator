@@ -66,9 +66,10 @@ For each milestone **sequentially** (parallel milestones share one working tree 
    ```
 
    Do NOT paste full ticket bodies into the brief — the milestone orchestrator fetches its own. Keep the brief under ~30 lines, and always end it with the "Begin now" imperative — orchestrators that open with a plan waste a round trip.
-3. On return, record only the summary block. Then decide:
+3. On return, record only the summary block. Then branch on the return, in this order:
+   - **`NOT ATTEMPTED: … — respawn (context budget)`** → the orchestrator hit its context bound and handed off cleanly (expected on large milestones). **Auto-spawn a continuation for the *same* milestone immediately, no user check-in** — repeat Phase 5.2 with the *same brief* (it reconstructs the remaining set from the run log itself; you pass it nothing new). Log `{"event":"milestone_continue","milestone":"<name>","remaining":<n>}`. Loop until a generation returns *without* that reason. **Safety valve:** if a continuation reports the *same or larger* `remaining` count as the prior one (no forward progress), stop looping and surface to the user — something is wedged, not just big.
    - `DECISIONS NEEDED` items → surface them to the user before continuing.
-   - `BLOCKED` ≥ 2 tickets, or any `NOT ATTEMPTED` → pause and check with the user (respawn a fresh orchestrator for leftovers if they say continue).
+   - `BLOCKED` ≥ 2 tickets, or any *other* `NOT ATTEMPTED` (a reason that is **not** context-budget) → pause and check with the user (respawn a fresh orchestrator for leftovers if they say continue).
    - Otherwise proceed to the next milestone.
 4. Between milestones, sanity-check `git status --porcelain` is clean. Dirty → stop; have a scope-guardian attribute the leftovers before anything else happens.
 

@@ -199,6 +199,9 @@ def main():
         out.append("- **Active time:** unknown")
     out.append(f"- **Agents dispatched (with usage logged):** {len(usage)}")
     out.append(f"- **Tickets done / blocked:** {counts['ticket_done']} / {counts['ticket_blocked']}")
+    if counts.get("milestone_continue"):
+        out.append(f"- **Orchestrator respawns (context-budget):** {counts['milestone_continue']} "
+                   "— milestones sliced to keep orchestrator context bounded")
     gate_lines = []
     for g in sorted(set(gate_fails) | set(gate_passes)):
         f_n, p_n = gate_fails.get(g, 0), gate_passes.get(g, 0)

@@ -74,3 +74,20 @@ def test_unknown_model_marked_unpriced(repo):
     write_log(repo, [usage_event(ticket="A-1", model="some-unknown-model", input_tokens=1000)])
     p = report(repo)
     assert "unpriced" in p.stdout.lower() or "unknown" in p.stdout.lower()
+
+def test_report_surfaces_orchestrator_respawns(repo):
+    write_log(repo, [
+        usage_event(ticket="A-1", model="claude-sonnet-5"),
+        {"event": "milestone_continue", "ts": "2026-07-15T10:05:00Z", "milestone": "M1", "remaining": 6},
+        {"event": "milestone_continue", "ts": "2026-07-15T10:20:00Z", "milestone": "M1", "remaining": 2},
+    ])
+    p = report(repo)
+    assert p.returncode == 0
+    assert "Orchestrator respawns (context-budget):** 2" in p.stdout
+
+
+def test_report_no_respawn_line_when_none(repo):
+    write_log(repo, [usage_event(ticket="A-1", model="claude-sonnet-5")])
+    p = report(repo)
+    assert p.returncode == 0
+    assert "respawns" not in p.stdout.lower()
