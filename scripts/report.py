@@ -227,6 +227,11 @@ def main():
         out.append(f"- **Budget-stopped agents:** {len(exceeded)} ("
                    + ", ".join(f"{(e.get('agent') or '?').split(':')[-1]}@{e.get('tool_calls')} calls"
                                for e in exceeded) + ")")
+    stalled = [e for e in events if e.get("event") == "deadline_exceeded"]
+    if stalled:
+        out.append(f"- **Deadline-stopped (stalled) agents:** {len(stalled)} ("
+                   + ", ".join(f"{(e.get('agent') or '?').split(':')[-1]}@{e.get('elapsed_min')}min"
+                               for e in stalled) + ")")
     out.append("")
 
     warnings = [e for e in events if e.get("event") == "usage_warning"]

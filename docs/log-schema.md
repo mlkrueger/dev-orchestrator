@@ -38,6 +38,7 @@ Keep `detail`/`reason` to one line — the log is for analytics, not transcripts
 | `event` | Fields |
 |---|---|
 | `budget_exceeded` | `agent_id`, `agent`, `tool_calls` — written once when a fleet agent exhausts its per-agent tool-call budget (defaults in the script; override via `tool_call_budgets` in `.dev-orchestrator/config.json`). Further tool calls are denied with a wrap-up instruction; the agent can still return its report. Counters live in `<run_dir>/budgets/<agent_id>.count`. |
+| `deadline_exceeded` | `agent_id`, `agent`, `elapsed_min`, `deadline_min`, `tool_calls` — written once when a fleet agent blows its per-agent **wall-clock** deadline (the stall watchdog; defaults in the script — gates 15–30 min, implementer 150 min, milestone-orchestrator exempt — override via `wall_clock_minutes` in `.dev-orchestrator/config.json`, `0` disables). Same soft landing as the call budget: further tool calls are denied, the agent returns what it has. The first-call timestamp lives in `<run_dir>/budgets/<agent_id>.start`. The orchestrator re-dispatches a deadline-stopped gate once, fresh, without consuming a retry attempt; a deadline-stopped implementer counts as a failed attempt. |
 
 Token counts are summed per API call from the subagent transcript, which matches how usage is billed (each call bills its full input context). Cost is therefore computed at report time as:
 

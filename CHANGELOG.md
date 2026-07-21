@@ -10,6 +10,16 @@ release body for that version's tag.
 
 ## [Unreleased]
 
+## [0.5.0] — 2026-07-21
+
+### Added
+- **Stall watchdog — per-agent wall-clock deadlines** (`scripts/agent_budget.py`): the budget hook now also denies tool calls once an agent outlives its wall-clock deadline (defaults: gates 15–30 min, implementer 150 min, milestone-orchestrator exempt; override via `wall_clock_minutes` in `.dev-orchestrator/config.json`, `0` disables), logging `deadline_exceeded` once and forcing the same soft-landing wrap-up as the call budget. Motivated by the openbrain studio-auth run, where one qa-verifier stalled for 12.1 h — 41% of the run's 29 h wall clock — without ever tripping the tool-call budget. The orchestrator treats a deadline-stopped gate as a stall (one fresh re-dispatch, no attempt consumed; second stall = FAIL) and a deadline-stopped implementer as a failed attempt. qa-verifier and simple-gate now carry explicit time discipline: bounded commands, no open-ended polling, fail fast on a wedged environment. `report.py` surfaces deadline-stopped agents; simple-gate also gained the tool-call budget it was missing.
+- **Resource pools** (`resource_pools` in `.dev-orchestrator/config.json`): a `resource:<name>` label still serializes holders by default, but a declared pool capacity lets the milestone-orchestrator run up to N holders concurrently, each dispatched with a distinct `RESOURCE_SLOT: <name>#<i>` line that implementers and gates use to isolate ports/state via the project harness's parameterization. `/orchestrate` now flags lock-heavy milestones at plan time (one e2e-preview lock serialized the entire back half of the studio-auth run) and ticket-smith prefers pools or batching several small same-resource journeys into one ticket over minting one serialized ticket each.
+
+### Changed
+- **Pipelined implementer dispatch — the gate barrier is gone** (milestone-orchestrator): concurrent implementers are now dispatched `run_in_background` (one call per ticket) and each ticket's scope→QA→review chain runs the moment *its* implementer finishes, instead of the previous synchronous batch where all gates waited on the slowest sibling (measured: one ticket's gates idled 2.2 h behind another's Opus implementer). Gates and single in-flight implementers stay synchronous; rework rounds are still always fresh agents.
+- **Time-based orchestrator respawn** (`orchestrator_respawn_hours`, default 4): a milestone-orchestrator generation now hands off on wall-clock age as well as ticket count and phase boundaries. Long generations degrade even at low ticket counts (dispatch-to-work latency grew to 60–90 min as one generation aged past 19 h); retries and stalls burn hours without advancing the ticket counter, and this catches that.
+
 ## [0.4.1] — 2026-07-15
 
 ### Added

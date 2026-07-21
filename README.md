@@ -93,7 +93,7 @@ Groomed tickets carry (ticket-smith enforces all of these):
 - `## Acceptance criteria` — testable, observable checks in the description.
 - `tier:simple|standard|complex` label → routes to Haiku / Sonnet / Opus. Most tickets are `standard`; `complex` should be rare (~1 in 10) or your tickets are too big.
 - `mod:<area>` labels — the modules the ticket may touch. These drive parallel-dispatch safety **and** scope-guardian audits.
-- `resource:<name>` labels — shared mutable resources the ticket needs exclusively (e.g. `resource:db` when tests reset a shared database). Tickets sharing a resource label never run in parallel.
+- `resource:<name>` labels — shared mutable resources the ticket needs (e.g. `resource:db` when tests reset a shared database). Tickets sharing a resource label are serialized by default; declaring `"resource_pools": {"<name>": <capacity>}` in `.dev-orchestrator/config.json` lets up to N run concurrently, each dispatched with a distinct `RESOURCE_SLOT` for port/state isolation (only for harnesses that support it).
 - Tracker-native blocked-by relations for dependencies (prose dependencies are ignored and flagged).
 
 ## Escalation & governance
@@ -142,7 +142,7 @@ agents/        milestone-orchestrator, implementer, scope-guardian,
 commands/      orchestrate.md, report.md, clean.md, help.md
 skills/tracker/{SKILL.md, adapters/linear.md}
 hooks/hooks.json          SubagentStop → usage logging
-                          PreToolUse → dispatch policy + per-agent budgets
+                          PreToolUse → dispatch policy + per-agent budgets/deadlines
                           SessionStart → post-update changelog notice
 scripts/       log_usage.py, log_event.sh, report.py, clean.py,
                dispatch_policy.py, agent_budget.py, validate_plan.py,

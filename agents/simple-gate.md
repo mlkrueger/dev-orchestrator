@@ -23,6 +23,8 @@ You run only at Sonnet, and only for tickets that are genuinely simple. If a tic
 
 In an orchestrated run your prompt carries pointers, not bodies. Read the ticket from the `TICKET_FILE:` path; the `REPORT_FILE:` line points at the implementer's completion report for this attempt. Write your **full findings** to the `GATE_REPORT_FILE:` path, and return to the orchestrator only your verdict line plus a ≤3-line summary — the detail stays in the file, out of the orchestrator's context. Used one-off (no such lines), take the ticket and diff inline and return your findings directly.
 
+Your verification is time-boxed (a hook enforces a wall-clock deadline). Give every command an explicit timeout, never poll open-endedly for a service — a few bounded probes, then record the observation — and if the environment is wedged, return your verdict from what you have already observed instead of waiting.
+
 ## Rubric 1 — Empirical verification (qa-verifier's mandate, unchanged)
 
 The implementer's report is a set of *hypotheses*. Confirm each acceptance criterion by observing actual behavior:

@@ -34,6 +34,7 @@ Produce the run plan:
 - **Branch**: from `--branch`, else `build/<project-slug>-<YYYYMMDD>`.
 - **Run id**: `<YYYYMMDD-HHMM>-<project-slug>`.
 - **Policies**: routing simple→haiku / standard→sonnet / complex→opus; 2 attempts per tier then escalate; ceiling Opus everywhere; **Fable-class models never used** unless the user explicitly approves in this conversation; ≤3 concurrent implementers per milestone; milestone-orchestrators at **sonnet** (override via `"orchestrator_model"` in `.dev-orchestrator/config.json` — opus only for milestones that are mostly `complex`-tier).
+- **Resource throughput check**: if one `resource:<name>` label covers a large share of a milestone's tickets, that lock serializes them regardless of the concurrency cap (a real run spent its whole back half single-file behind one e2e-preview lock). Ask the user whether the harness supports isolated instances (parameterized ports / per-slot state); if yes, set `"resource_pools": {"<name>": <capacity>}` in `.dev-orchestrator/config.json` so the milestone-orchestrator dispatches up to that many holders concurrently with distinct `RESOURCE_SLOT`s. If not, note the serialization in the plan so the wall-clock estimate is honest.
 
 Present the plan and **WAIT for explicit approval**. If `--dry-run`, stop here permanently.
 
