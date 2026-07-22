@@ -557,8 +557,21 @@ def build_parser() -> argparse.ArgumentParser:
     return ap
 
 
+def resolve_tracker() -> str:
+    """Which backend to use. `local` is file-backed (this repo's build plan);
+    anything else (default) is the Linear path below. Config-driven so callers
+    never pass a backend flag."""
+    return str(load_config().get("tracker") or "linear")
+
+
 def main():
     args = build_parser().parse_args()
+    if resolve_tracker() == "local":
+        # File-backed backend: no API key, no MCP. Same canonical JSON out.
+        sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+        import tracker_local
+        tracker_local.dispatch_local(args, load_config())
+        return
     try:
         args.func(args)
     except RuntimeError as e:

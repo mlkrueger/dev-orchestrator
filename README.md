@@ -30,7 +30,7 @@ you ──/orchestrate──▶ top-level session (plan, confirm, dispatch, deci
 /plugin install dev-orchestrator
 ```
 
-Requires: a git repo, `python3`, and a connected tracker MCP server (Linear by default).
+Requires: a git repo and `python3`. A tracker is optional — connect a tracker MCP server (Linear by default), or use a **local build plan file** as your ticket source with no external tracker at all (`{"tracker": "local"}`; see [docs/local-tracker.md](docs/local-tracker.md)). YAML build plans need PyYAML; JSON build plans need nothing.
 
 ## Usage
 
@@ -130,9 +130,14 @@ Optional, report-only. Point a webhook or bot token at a channel and a run's lif
 { "slack": { "notify": "milestones", "progress_every": 5, "channel": "#dev-runs" } }
 ```
 
-## Tracker adapters
+## Trackers
 
-Agents speak a canonical ticket model (`skills/tracker/SKILL.md`); adapters map it to real tools. `linear` ships in-box. To add Jira/GitHub/etc.: copy `skills/tracker/adapters/linear.md`, map the operations and status table to your tracker's MCP tools, and set `{"tracker": "<name>"}` in `.dev-orchestrator/config.json`. Adapters are pure mappings — no policy.
+Agents speak a canonical ticket model (`skills/tracker/SKILL.md`); `bin/tracker` routes to the configured backend so callers are backend-agnostic. Two ship in-box:
+
+- **`linear`** (default) — the Linear GraphQL API via `bin/tracker` (`LINEAR_API_KEY`), with an MCP adapter fallback.
+- **`local`** — no external tracker at all: a **build plan file** in the repo (`.dev-orchestrator/build-plan.yaml`) is the ticket source, and status is written back into it as work proceeds. No API key, MCP server, or network. Full run loop (`list`/`get`/`set-status`/`comment`); grooming is editing the YAML. Details: [docs/local-tracker.md](docs/local-tracker.md).
+
+To add Jira/GitHub/etc. over MCP: copy `skills/tracker/adapters/linear.md`, map the operations and status table to your tracker's MCP tools, and set `{"tracker": "<name>"}` in `.dev-orchestrator/config.json`. Adapters are pure mappings — no policy.
 
 ## Unattended runs & permissions
 
@@ -155,6 +160,8 @@ gh release create v<version> --notes "$(python3 scripts/check_changelog.py)"
 agents/        milestone-orchestrator, implementer, scope-guardian,
                qa-verifier, code-reviewer, ticket-smith
 commands/      orchestrate.md, report.md, clean.md, help.md
+bin/tracker               backend-routing ticket CLI (canonical JSON I/O)
+bin/tracker_local.py      local build-plan backend (file-backed tracker)
 skills/tracker/{SKILL.md, adapters/linear.md}
 hooks/hooks.json          SubagentStop → usage logging
                           PreToolUse → dispatch policy + per-agent budgets/deadlines
@@ -164,7 +171,7 @@ scripts/       log_usage.py, log_event.sh, report.py, clean.py,
                remaining_work.py, slack_notify.py, ensure_env.py,
                notify_update.py, check_changelog.py
 config/pricing.json       editable $/MTok table
-docs/log-schema.md, docs/slack.md
+docs/log-schema.md, docs/slack.md, docs/local-tracker.md
 CHANGELOG.md              source of truth for release notes
 ```
 
