@@ -2,6 +2,10 @@
 
 Each run owns a directory: `.dev-orchestrator/runs/<run-id>/` in the target repo, containing `meta.json` (run parameters) and `log.jsonl` — an **append-only** event log. `.dev-orchestrator/current-run` holds the active run dir path; the usage hook and helper scripts no-op when it is absent.
 
+The run dir also holds transient working artifacts: `tickets/`, `gates/`, `reports/`, `budgets/`, plus `tracker-status.json` (the milestone's live tracker statuses, pinned once per generation and fed to `remaining_work.py --tracker-status-file` so resume reconciles against the board) and `slack-thread` (the run's Slack thread ts, if Slack reporting is configured). All of it is machine-local and gitignored.
+
+**The tracker is the durable source of truth for resume.** `log.jsonl` is fast and precise but lives only on the run's disk — a reclaimed container or fresh clone loses it. The tracker's ticket statuses survive that. `remaining_work.py` therefore reconciles both: a ticket is done if **either** the log or the tracker says so, so a run resumed with a lost log still skips completed work. Its `resync` output lists tickets the log closed but the tracker doesn't yet reflect (a `set-status` write that never landed); the orchestrator re-issues those to keep the board accurate for the *next* interruption.
+
 `.dev-orchestrator/environment.json` is a per-clone **setup ledger** (not per-run) written by the commit-gate preflight (`scripts/ensure_env.py`). It records `checks_command` and, under `setup.git_hooks`, whether the shared `pre-commit` gate is installed plus its `hook_sha`. The preflight reads it to fast-path: installed + matching sha ⇒ nothing to do; missing or drifted sha ⇒ re-offer. It is machine-local state (gitignored like the rest of `.dev-orchestrator/`); the gate it installs — `.githooks/pre-commit`, wired via `core.hooksPath` — is the committed, shared artifact.
 
 Every line is one JSON object with at least `ts` (UTC ISO-8601, e.g. `2026-07-05T14:03:22Z`) and `event`.
@@ -18,6 +22,7 @@ Every line is one JSON object with at least `ts` (UTC ISO-8601, e.g. `2026-07-05
 | `commit` | `ticket`, `sha`, `files` | Per-ticket commit made |
 | `ticket_done` | `ticket`, `milestone`, `phase`, `attempts`, `final_tier` | Ticket passed all gates and committed |
 | `ticket_blocked` | `ticket`, `milestone`, `reason` | Ticket abandoned after opus failed twice |
+| `tracker_sync_failed` | `ticket`, `want` (`done`\|`blocked`\|`in_progress`) | A `set-status` write failed twice — the tracker didn't record the mark. The next generation's `resync` step (below) repairs it from the log. |
 | `milestone_continue` | `milestone`, `remaining` | A milestone-orchestrator respawned to bound context; parent auto-spawned its successor (see the orchestrator's *Respawn to bound context*). `remaining` monotonically decreasing across generations — the parent stops looping if it isn't. |
 | `milestone_end` | `milestone`, `done`, `blocked` | Milestone-orchestrator finished |
 | `run_end` | `run`, `done`, `blocked` | Run closed out |

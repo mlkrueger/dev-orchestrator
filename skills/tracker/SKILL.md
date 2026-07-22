@@ -9,13 +9,15 @@ All dev-orchestrator components speak this canonical model. Operations run **scr
 
 ## How to run an operation
 
-1. Read `.dev-orchestrator/config.json` in the repo root; use its `"tracker"` value (e.g. `"linear"`; no config → default `linear`).
-2. **Script path (preferred).** For `linear`, call `bin/tracker` via Bash when `LINEAR_API_KEY` is set:
+1. Read `.dev-orchestrator/config.json` in the repo root; use its `"tracker"` value (e.g. `"linear"`, `"local"`; no config → default `linear`).
+2. **Script path (preferred).** Call `bin/tracker` via Bash — it routes to the configured backend, so the command is identical for every tracker:
    ```
    python3 "${CLAUDE_PLUGIN_ROOT}/bin/tracker" <subcommand> ...
    ```
    It prints canonical JSON to stdout (one compact object/array), exits non-zero on error. This is the path to use in orchestrated and headless/cron runs — it needs no MCP session. See the subcommand list below.
-3. **Adapter fallback.** If no API key is set (or the tracker has no script), read `adapters/<tracker>.md` **in this skill's directory** and drive the operation through its MCP mappings. If the adapter's MCP tools are not connected either, stop and tell the user which tracker/server or key is missing.
+   - `linear` uses the Linear GraphQL API when `LINEAR_API_KEY` is set.
+   - `local` is file-backed (no key, no MCP, no network — see *Local tracker* below); it is always available.
+3. **Adapter fallback.** If the configured tracker is script-backed but its prerequisite is missing (e.g. `linear` with no `LINEAR_API_KEY`), read `adapters/<tracker>.md` **in this skill's directory** and drive the operation through its MCP mappings. If the adapter's MCP tools are not connected either, stop and tell the user which tracker/server or key is missing. (`local` has no fallback and needs none.)
 
 ## `bin/tracker` subcommands (Linear)
 
@@ -30,6 +32,16 @@ tracker add-dependency <id> --blocked-by <id>
 ```
 
 Auth: `LINEAR_API_KEY`. Team for `list`/`create`: `--team`, else `linear.team` in `.dev-orchestrator/config.json`. The script owns status mapping (by state *type*) and label conventions (`tier:`/`mod:`/`resource:`, create-if-missing) — callers don't re-derive them.
+
+## Local tracker (no external tracker)
+
+Set `{"tracker": "local"}` to use a **build plan file** as the ticket source — for users with no Linear/Jira/etc. installed, or who don't want one. `bin/tracker` reads and writes the plan directly (implemented in `bin/tracker_local.py`); ticket status is written back into it, so the plan doubles as the board and stays an accurate source of truth to resume from.
+
+- **Plan location:** `.dev-orchestrator/build-plan.yaml` by default (`.yml`/`.json` also detected); override with `"local": {"plan": "<path>"}`. YAML needs PyYAML; `.json` plans need nothing.
+- **Format & schema:** see [docs/local-tracker.md](../../docs/local-tracker.md). Each ticket carries the canonical fields directly (`id`, `title`, `status`, `tier`, `modules`, `resources`, `phase`, `depends_on`, `acceptance_criteria`/`description`), under a `milestones:` tree or a flat `tickets:` list.
+- **Supported ops:** `list`, `get`, `set-status`, `comment` — the full autonomous run loop. `set-status` edits only the ticket's `status:` line, preserving the rest of a hand-authored plan. Comments go to a companion store (`.dev-orchestrator/comments/<id>.jsonl`) so status writes never reflow the plan.
+- **Grooming:** `create`/`update`/`add-dependency` are **not** CLI operations for `local` — groom by editing the plan YAML directly (this is also how ticket-smith grooms a local backlog). The CLI returns a clear pointer if called.
+- **Durability:** the default plan lives under gitignored `.dev-orchestrator/` — container-local, like the run log. To carry status across clones, point `local.plan` at a committed path (and commit status changes yourself).
 
 ## Canonical ticket model
 
