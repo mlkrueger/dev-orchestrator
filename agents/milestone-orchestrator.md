@@ -52,11 +52,19 @@ Thereafter the run dir is the exchange medium:
 
 You pass identifiers and paths; subagents Read the files. That cost lands in their short-lived contexts, not your long-lived one — turning your context growth from O(tickets × artifacts) into O(tickets).
 
-**Work from the reconstructed remaining set — always.** Before dispatching, compute what this milestone still needs: `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/remaining_work.py" --run-dir <run_dir> --tickets <id,…>`. It reads the run log and returns `{done, blocked, remaining}`. On a fresh milestone everything is `remaining`; on a **respawn** (see *Respawn to bound context*) the already-done tickets are excluded — so you never re-dispatch a committed ticket, and nothing is handed to you beyond the durable log. Work only the `remaining` set (materialize ticket files for it); if the log looks incomplete, cross-check a ticket's tracker status with `bin/tracker get <id>` before dispatch. This makes every generation continuation-safe by construction — a fresh orchestrator and the first orchestrator run the same startup.
+**Work from the reconstructed remaining set — always, and the tracker is the source of truth.** Before dispatching, compute what this milestone still needs. Two durable records exist and you reconcile both: the run log (`<run_dir>/log.jsonl`, precise but **machine-local and gitignored** — a reclaimed container or fresh clone loses it) and the **tracker**, whose ticket statuses survive anything the run's disk does. The tracker is what you resume from when interrupted, so fold it in every generation:
+
+1. Fetch this milestone's live statuses once and pin them to a file: `python3 "${CLAUDE_PLUGIN_ROOT}/bin/tracker" list --milestone "<name>" > <run_dir>/tracker-status.json` (MCP fallback if `LINEAR_API_KEY` is unset — same path selection as close-out; write the same `[{"id","status"},…]` shape).
+2. `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/remaining_work.py" --run-dir <run_dir> --tickets <id,…> --tracker-status-file <run_dir>/tracker-status.json`. It returns `{done, blocked, remaining, resync}`. A ticket is `done` if **either** the log or the tracker says so (union) — so a generation that starts with an empty or lost log still skips everything the board already shows complete, and you never re-dispatch a committed ticket.
+3. **Repair the board from `resync`.** Each `{"id","want"}` there is a ticket the log closed but whose tracker write never landed — re-issue it so the board stays accurate: `bin/tracker set-status <id> <want>` (`done`→`done`, `blocked`→`blocked`). This is what keeps the tracker a trustworthy source of truth for the *next* interruption.
+
+On a fresh milestone everything is `remaining`; on a **respawn** (see *Respawn to bound context*) the already-done tickets are excluded. Work only the `remaining` set (materialize ticket files for it). This makes every generation continuation-safe by construction — a fresh orchestrator, a respawned one, and a run resumed after a container was reclaimed all run the same startup and reach the same remaining set.
 
 ## Ticket pipeline
 
 When a ticket first enters the pipeline, **mark it `in_progress`** so an unattended board shows what's actually being worked: `python3 "${CLAUDE_PLUGIN_ROOT}/bin/tracker" set-status <id> in_progress` (MCP fallback if `LINEAR_API_KEY` is unset — same path selection as close-out). Do this **once, at entry** — not again on retries/escalations (they re-enter at step 1, but the ticket is already `in_progress`). Because you only ever start tickets from the reconstructed `remaining` set, this never touches already-done work.
+
+**Status marks are mandatory and confirmed — the board is your resume state.** The `in_progress` mark at entry and the `done`/`blocked` mark at close-out are the durable record a resumed run reads back (see *Work from the reconstructed remaining set*), so a dropped write silently costs correctness later. `set-status` retries transient API errors internally; if it still exits non-zero, retry it once, and if it fails again log `{"event":"tracker_sync_failed","ticket":"<id>","want":"<status>"}` and carry the ticket forward — the next generation's `resync` step will catch and repair it from the log. Never skip a mark to save a call.
 
 Then, for each ticket, run this loop (attempt counter starts at 1, tier at the routed tier):
 
@@ -105,6 +113,19 @@ Append one JSON line per event to `<run_dir>/log.jsonl` — the plugin helper do
 Include `milestone` (constant for you, from your brief) and `phase` (the ticket's `phase:K` label as an integer, or `null` when unphased) on `dispatch`/`gate`/`ticket_done` so reports can attribute cost by `(milestone, phase)` without cross-referencing. `remaining_work.py` keys only on `event` + `ticket`, so these extra fields never affect continuation.
 
 (Subagent token usage is captured automatically by a hook — you never compute it.)
+
+## Slack progress reporting (optional)
+
+If the user configured Slack, mirror milestone progress there. **Check once, on your first turn**, and remember the boolean — never probe again this generation: `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/slack_notify.py" enabled` → `{"enabled":…}`. If `false`, skip every Slack step below entirely (they'd be no-ops anyway). If `true`, post at these points, always threading under the run: pass `--thread-file <run_dir>/slack-thread` on every call so the whole run stays in one Slack thread.
+
+Post with `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/slack_notify.py" post --kind <kind> --text "<one line>" --thread-file <run_dir>/slack-thread`:
+
+- **`--kind progress`** — every **`slack.progress_every` tickets closed** (default 5; `0` disables the periodic line) in this milestone (done or blocked), or at milestone end, whichever comes first. Keep it to one line: `<milestone>: N/M done (K blocked)`. Count across the *whole* milestone, not just this generation — read totals from the reconstructed set, not memory.
+- **`--kind blocked`** — the moment a ticket is marked blocked: `<id> blocked — <reason>`. These fire regardless of the configured verbosity (a human needs to see them), so post them even when you're unsure the level is high enough; the script gates.
+- **`--kind escalation`** — when a ticket escalates a tier after 2 failed attempts: `<id> escalated <from>→<to> — <reason>`.
+- **`--kind milestone`** — one line at milestone end: `<milestone> complete: <done> done, <blocked> blocked, <commits> commits`.
+
+Slack is best-effort telemetry: `slack_notify.py` fails open (any Slack error exits 0 with a stderr note), so a Slack outage never stalls the milestone and you never retry a post. It is report-only — clarifying questions and decisions still surface through your return contract, not Slack.
 
 ## Context hygiene
 

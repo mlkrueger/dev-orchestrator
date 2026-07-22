@@ -10,6 +10,12 @@ release body for that version's tag.
 
 ## [Unreleased]
 
+### Added
+- **Slack progress reporting** (`scripts/slack_notify.py`, opt-in): a stdlib-only, report-only notifier that mirrors a run's lifecycle to Slack — run start/end, milestone boundaries, a progress line every N tickets (`progress_every`, default 5, or milestone-end, whichever is sooner), and always blocked tickets and escalations. Two transports: an incoming webhook (`SLACK_WEBHOOK_URL`, post-only) or a bot token (`SLACK_BOT_TOKEN` + `slack.channel`/`SLACK_CHANNEL`, which threads a whole run under one message). Verbosity via `slack.notify` (`off`\|`run`\|`milestones`\|`all`, default `milestones`); blocked/escalation/decision kinds fire at any non-off level. Fails open (a Slack error exits 0 with a stderr note — telemetry, never a gate) and no-ops entirely when unconfigured, so orchestrators call it unconditionally. Secrets stay in env, never in config. `/orchestrate` posts the run/milestone/decision events; the milestone-orchestrator posts progress/blocked/escalation/milestone-end. Report-only by design: the orchestrator never reads Slack, so clarifying questions still come back through the Claude session. Setup: `docs/slack.md`.
+
+### Changed
+- **The tracker is now the durable source of truth for resume** (`scripts/remaining_work.py`, milestone-orchestrator): reconstruction folds the tracker's live ticket statuses (new `--tracker-status-file`, fed the `bin/tracker list` output pinned to `<run-dir>/tracker-status.json`) into the local run log, treating a ticket as done if **either** source says so. Because `log.jsonl` is machine-local and gitignored, an interrupted run — reclaimed container, fresh clone, lost run dir — could previously lose its continuation state; now a run resumed with no local log still skips everything the board shows complete, and a `set-status` write that never landed still can't cause a committed ticket to be redone. New `resync` output flags marks the log recorded but the tracker missed; the orchestrator re-issues them (and logs `tracker_sync_failed` when a mark can't be written) so the board stays accurate for the next interruption. Status marks (`in_progress` at pipeline entry, `done`/`blocked` at close-out) are now mandatory and confirmed. `/orchestrate` detects an interrupted run via `current-run` and offers to resume it in place. Backward compatible: without `--tracker-status-file`, `remaining_work.py` behaves exactly as before (plus an empty `resync`).
+
 ## [0.5.0] — 2026-07-21
 
 ### Added

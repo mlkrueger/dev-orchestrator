@@ -115,6 +115,21 @@ Schema: [docs/log-schema.md](docs/log-schema.md). The hook no-ops unless `.dev-o
 
 Logs live only in the repo (gitignored) and are never pruned automatically — a run stays reportable until you delete it. Inspect with `jq`/`grep` or `/dev-orchestrator:report`; prune with `/dev-orchestrator:clean` (or plain `rm -rf .dev-orchestrator/runs/<run-id>` — same effect).
 
+## Resumable state — the tracker is the source of truth
+
+A run can be interrupted at any point — a reclaimed container, a killed session, a lost run dir. Because the run log (`log.jsonl`) is machine-local and gitignored, it can't be relied on to survive that; the **tracker** can. So every ticket is marked `in_progress` when work starts and `done`/`blocked` when it finishes, and those marks are the durable state a resumed run reads back.
+
+On startup — fresh, respawned, or resumed after an interruption — each milestone-orchestrator reconciles both records: `scripts/remaining_work.py` folds the tracker's live statuses (`--tracker-status-file`) into the local log and treats a ticket as done if *either* says so. A run resumed with no local log still skips everything the board shows complete, and a tracker write that never landed still can't cause a committed ticket to be redone. Its `resync` output flags marks the log recorded but the tracker missed, and the orchestrator re-issues them — keeping the board accurate for the next interruption. Re-running `/orchestrate` on an interrupted run offers to resume it in place.
+
+## Slack progress reporting
+
+Optional, report-only. Point a webhook or bot token at a channel and a run's lifecycle — start/end, milestone boundaries, a progress line every few tickets, and always blocked tickets and escalations — mirrors to Slack, so you can follow an unattended run from your phone. Bot-token setups thread a whole run under one message. It fails open (a Slack outage never stalls a run) and no-ops entirely when unconfigured; the orchestrator never reads replies, so decisions still come back through the Claude session. Setup and verbosity levels: [docs/slack.md](docs/slack.md).
+
+```json
+// .dev-orchestrator/config.json — secrets stay in env (SLACK_WEBHOOK_URL or SLACK_BOT_TOKEN)
+{ "slack": { "notify": "milestones", "progress_every": 5, "channel": "#dev-runs" } }
+```
+
 ## Tracker adapters
 
 Agents speak a canonical ticket model (`skills/tracker/SKILL.md`); adapters map it to real tools. `linear` ships in-box. To add Jira/GitHub/etc.: copy `skills/tracker/adapters/linear.md`, map the operations and status table to your tracker's MCP tools, and set `{"tracker": "<name>"}` in `.dev-orchestrator/config.json`. Adapters are pure mappings — no policy.
@@ -146,9 +161,10 @@ hooks/hooks.json          SubagentStop → usage logging
                           SessionStart → post-update changelog notice
 scripts/       log_usage.py, log_event.sh, report.py, clean.py,
                dispatch_policy.py, agent_budget.py, validate_plan.py,
+               remaining_work.py, slack_notify.py, ensure_env.py,
                notify_update.py, check_changelog.py
 config/pricing.json       editable $/MTok table
-docs/log-schema.md
+docs/log-schema.md, docs/slack.md
 CHANGELOG.md              source of truth for release notes
 ```
 
